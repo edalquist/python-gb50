@@ -65,6 +65,30 @@ class StateManager:
     def groups(self) -> Dict[int, GroupStatus]:
         return dict(self._groups_cache)
 
+    async def get_system_info(self) -> SystemInfo:
+        """Fetch or return cached controller system info."""
+        if self._system_info is None:
+            self._system_info = await self.client.get_system_info()
+        return self._system_info
+
+    async def get_all_groups(self, refresh: bool = False) -> List[GroupStatus]:
+        """Fetch or return cached group status list."""
+        if refresh or not self._groups_cache:
+            groups = await self.client.get_all_groups(refresh_topology=refresh)
+            async with self._lock:
+                for g in groups:
+                    self._groups_cache[g.group_id] = g
+        return list(self._groups_cache.values())
+
+    async def get_group(self, group_id: int) -> GroupStatus:
+        """Fetch or return cached group status for a single group."""
+        if group_id not in self._groups_cache:
+            telemetry = await self.client.get_groups_telemetry([group_id])
+            if telemetry:
+                async with self._lock:
+                    self._groups_cache[group_id] = telemetry[0]
+        return self._groups_cache[group_id]
+
     def add_listener(self, callback: Callable[[GroupStatus], Any]) -> None:
         """Register a callback invoked when an HVAC zone state updates."""
         self._listeners.add(callback)
@@ -79,6 +103,14 @@ class StateManager:
 
     def remove_subscriber(self, ws: Any) -> None:
         """Unregister a raw WebSocket client."""
+        self._raw_subscribers.discard(ws)
+
+    def register_ws(self, ws: Any) -> None:
+        """Register a WebSocket connection."""
+        self._raw_subscribers.add(ws)
+
+    def unregister_ws(self, ws: Any) -> None:
+        """Unregister a WebSocket connection."""
         self._raw_subscribers.discard(ws)
 
     async def get_schedule(self, group_id: int) -> List[ScheduleItem]:
@@ -103,6 +135,10 @@ class StateManager:
 
     async def control_batch(self, updates: Dict[int, GroupControlRequest]) -> List[GroupStatus]:
         """Batch mutate multiple groups in one call."""
+        return await self.control_groups_batch(updates)
+
+    async def control_groups_batch(self, updates: Dict[int, GroupControlRequest]) -> List[GroupStatus]:
+        """Batch mutate multiple groups in one call."""
         await self.client.set_groups_batch(updates)
         updated_list = await self.client.get_groups_telemetry(list(updates.keys()))
         async with self._lock:
@@ -110,6 +146,31 @@ class StateManager:
                 self._groups_cache[g.group_id] = g
         await self._broadcast_update(updated_list)
         return updated_list
+
+    async def rename_group(self, group_id: int, new_name: str) -> GroupStatus:
+        """Rename group display name."""
+        await self.client.set_group_name(group_id, new_name)
+        groups = await self.client.get_all_groups(refresh_topology=True)
+        async with self._lock:
+            for g in groups:
+                self._groups_cache[g.group_id] = g
+        updated = self._groups_cache.get(group_id)
+        if updated:
+            await self._broadcast_update([updated])
+            return updated
+        return await self.get_group(group_id)
+
+    async def reset_filter(self, group_id: int) -> GroupStatus:
+        """Clear dirty air filter flag."""
+        await self.client.reset_filter(group_id)
+        updated_list = await self.client.get_groups_telemetry([group_id])
+        if updated_list:
+            updated = updated_list[0]
+            async with self._lock:
+                self._groups_cache[group_id] = updated
+            await self._broadcast_update([updated])
+            return updated
+        return self._groups_cache[group_id]
 
     async def apply_preset(self, preset_name: str) -> List[GroupStatus]:
         """Apply pre-configured church operations presets."""
