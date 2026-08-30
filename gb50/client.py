@@ -190,6 +190,16 @@ class GB50Client:
         xml_resp = await self._send_xml(xml_req)
         return parse_groups_telemetry(xml_resp, topology=topology)
 
+    async def get_groups_telemetry(self, group_ids: Optional[List[int]] = None) -> List[GroupStatus]:
+        """Fetch real-time telemetry for specified group IDs (or all groups if None)."""
+        topology = await self.get_topology()
+        if not topology:
+            return []
+        target_ids = group_ids if group_ids is not None else sorted(topology.keys())
+        xml_req = build_get_groups_telemetry_request(target_ids)
+        xml_resp = await self._send_xml(xml_req)
+        return parse_groups_telemetry(xml_resp, topology=topology)
+
     async def get_group(self, group_id: int) -> GroupStatus:
         """Fetch real-time status for a single HVAC group."""
         topology = await self.get_topology()
