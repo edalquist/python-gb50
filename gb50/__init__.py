@@ -21,11 +21,13 @@ from .models import (
 )
 from .protocol import GB50ProtocolError
 from .client import GB50Client
+from .state_manager import StateManager
 
 __version__ = "1.0.0"
 
 __all__ = [
     "GB50Client",
+    "StateManager",
     "GB50ProtocolError",
     "DriveState",
     "OperationMode",
