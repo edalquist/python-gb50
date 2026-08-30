@@ -125,8 +125,76 @@ def build_get_topology_request() -> str:
     return wrap_packet("getRequest", body)
 
 
+def build_set_all_group_names_request(names: Dict[int, str]) -> str:
+    """Build request to set web display names for all groups (preventing wiping unmentioned groups)."""
+    records = []
+    for gid in sorted(names.keys()):
+        name_val = names[gid]
+        if name_val:
+            clean_name = str(name_val).replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
+            records.append(f'        <MnetRecord Group="{gid}" GroupNameWeb="{clean_name}" />\r\n')
+    body = (
+        f'    <ControlGroup>\r\n'
+        f'      <MnetList>\r\n'
+        f'{"".join(records)}'
+        f'      </MnetList>\r\n'
+        f'    </ControlGroup>\r\n'
+    )
+    return wrap_packet("setRequest", body)
+
+
+def build_set_full_topology_request(
+    topology: Dict[int, Dict[str, Any]],
+    floor_mappings: Optional[Dict[int, int]] = None,
+) -> str:
+    """Build request to configure complete M-Net device mapping, names, and floors for all groups."""
+    mnet_records = []
+    group_records = []
+    floor_records = []
+
+    for gid in sorted(topology.keys()):
+        info = topology[gid]
+        name = info.get("name", f"Group {gid}")
+        clean_name = str(name).replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
+        mnet_records.append(f'        <MnetRecord Group="{gid}" GroupNameWeb="{clean_name}" />\r\n')
+
+        model = info.get("model", "IC")
+        if hasattr(model, "value"):
+            model = model.value
+        addr = info.get("address", gid)
+        group_records.append(f'        <MnetGroupRecord Group="{gid}" Model="{model}" Address="{addr}" />\r\n')
+
+        for slave in info.get("slaves", info.get("slave_addresses", [])):
+            group_records.append(f'        <MnetGroupRecord Group="{gid}" Model="{model}" Address="{slave}" />\r\n')
+
+        for rc in info.get("rcs", []):
+            group_records.append(f'        <MnetGroupRecord Group="{gid}" Model="RC" Address="{rc}" />\r\n')
+
+        if floor_mappings and gid in floor_mappings:
+            flr = floor_mappings[gid]
+            if flr > 0:
+                floor_records.append(f'        <FloorGroupRecord Group="{gid}" Floor="{flr}" />\r\n')
+
+    floor_section = ""
+    if floor_records:
+        floor_section = f'      <FloorGroupList>\r\n{"".join(floor_records)}      </FloorGroupList>\r\n'
+
+    body = (
+        f'    <ControlGroup>\r\n'
+        f'      <MnetList>\r\n'
+        f'{"".join(mnet_records)}'
+        f'      </MnetList>\r\n'
+        f'      <MnetGroupList>\r\n'
+        f'{"".join(group_records)}'
+        f'      </MnetGroupList>\r\n'
+        f'{floor_section}'
+        f'    </ControlGroup>\r\n'
+    )
+    return wrap_packet("setRequest", body)
+
+
 def build_set_group_name_request(group_id: int, name: str) -> str:
-    """Build request to rename an HVAC group web display name."""
+    """Build request to rename a single HVAC group web display name."""
     clean_name = name.replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
     body = (
         f'    <ControlGroup>\r\n'

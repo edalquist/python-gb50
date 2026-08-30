@@ -29,7 +29,9 @@ from .protocol import (
     build_set_system_data_request,
     build_get_topology_request,
     build_set_group_name_request,
+    build_set_all_group_names_request,
     build_set_group_topology_request,
+    build_set_full_topology_request,
     build_delete_group_request,
     build_get_floor_mapping_request,
     parse_floor_mapping,
@@ -169,16 +171,25 @@ class GB50Client:
         rcs: Optional[List[int]] = None,
         floor: Optional[int] = None,
     ) -> bool:
-        """Configure group name, primary unit address, slave units, remote controllers, and floor."""
-        xml_req = build_set_group_topology_request(
-            group_id=group_id,
-            name=name,
-            primary_ic=primary_ic,
-            model=model,
-            slave_ics=slave_ics,
-            rcs=rcs,
-            floor=floor,
-        )
+        """Configure group name, primary unit address, slave units, remote controllers, and floor, preserving all other groups."""
+        top = await self.get_topology()
+        # Merge updated group into full topology map
+        top[group_id] = {
+            "name": name,
+            "address": primary_ic,
+            "model": model,
+            "slaves": slave_ics or [],
+            "rcs": rcs or [],
+        }
+        floor_map = {}
+        try:
+            floor_map = await self.get_floor_mappings()
+        except Exception:
+            pass
+        if floor is not None and floor > 0:
+            floor_map[group_id] = floor
+
+        xml_req = build_set_full_topology_request(top, floor_mappings=floor_map)
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
         check_error_response(root, raw_xml=xml_resp)
@@ -186,8 +197,20 @@ class GB50Client:
         return True
 
     async def delete_group(self, group_id: int) -> bool:
-        """Delete an HVAC group and unassign its devices and floor from controller memory."""
-        xml_req = build_delete_group_request(group_id)
+        """Delete an HVAC group and unassign its devices and floor from controller memory, preserving all other groups."""
+        top = await self.get_topology()
+        if group_id in top:
+            del top[group_id]
+
+        floor_map = {}
+        try:
+            floor_map = await self.get_floor_mappings()
+            if group_id in floor_map:
+                del floor_map[group_id]
+        except Exception:
+            pass
+
+        xml_req = build_set_full_topology_request(top, floor_mappings=floor_map)
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
         check_error_response(root, raw_xml=xml_resp)
@@ -242,7 +265,7 @@ class GB50Client:
     async def set_group(
         self,
         group_id: int,
-        drive: Optional[DriveState] = None,
+        drive: Optional[Union[GroupControlRequest, DriveState, str]] = None,
         mode: Optional[OperationMode] = None,
         set_temp_c: Optional[float] = None,
         set_temp_f: Optional[float] = None,
@@ -251,15 +274,18 @@ class GB50Client:
         remote_lock: Optional[RemoteControlPermission] = None,
     ) -> bool:
         """Send command to control an HVAC group."""
-        req = GroupControlRequest(
-            drive=drive,
-            mode=mode,
-            set_temp_c=set_temp_c,
-            set_temp_f=set_temp_f,
-            air_direction=air_direction,
-            fan_speed=fan_speed,
-            remote_lock=remote_lock,
-        )
+        if isinstance(drive, GroupControlRequest):
+            req = drive
+        else:
+            req = GroupControlRequest(
+                drive=drive,
+                mode=mode,
+                set_temp_c=set_temp_c,
+                set_temp_f=set_temp_f,
+                air_direction=air_direction,
+                fan_speed=fan_speed,
+                remote_lock=remote_lock,
+            )
         xml_req = build_set_group_request(group_id, req)
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
@@ -267,8 +293,12 @@ class GB50Client:
         return True
 
     async def set_group_name(self, group_id: int, name: str) -> bool:
-        """Rename an HVAC group web display name."""
-        xml_req = build_set_group_name_request(group_id, name)
+        """Rename an HVAC group web display name, preserving all other group names."""
+        top = await self.get_topology()
+        all_names = {gid: info.get("name", f"Group {gid}") for gid, info in top.items()}
+        all_names[group_id] = name
+
+        xml_req = build_set_all_group_names_request(all_names)
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
         check_error_response(root, raw_xml=xml_resp)

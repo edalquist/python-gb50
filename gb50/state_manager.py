@@ -219,6 +219,19 @@ class StateManager:
 
         return await self.control_batch(updates)
 
+    async def poll_now(self) -> List[GroupStatus]:
+        """Force an immediate poll cycle, refresh topology/groups, and broadcast updates."""
+        try:
+            new_groups = await self.client.get_all_groups(refresh_topology=True)
+            async with self._lock:
+                self._groups_cache = {g.group_id: g for g in new_groups}
+            if new_groups:
+                await self._broadcast_update(new_groups)
+            return new_groups
+        except Exception as ex:
+            logger.warning(f"Error during poll_now: {ex}")
+            return list(self._groups_cache.values())
+
     async def _poll_loop(self) -> None:
         """Continuous background polling loop."""
         while self._running:

@@ -179,3 +179,21 @@ def test_group_crud_and_floor_protocol():
     assert mapping[2] == 1
     assert mapping[20] == 2
 
+    # Test full topology request builder
+    from gb50.protocol import build_set_all_group_names_request, build_set_full_topology_request
+    all_names = {1: "FC1-1", 2: "RM107", 3: "FC1-3"}
+    req_names = build_set_all_group_names_request(all_names)
+    assert 'Group="1" GroupNameWeb="FC1-1"' in req_names
+    assert 'Group="2" GroupNameWeb="RM107"' in req_names
+    assert 'Group="3" GroupNameWeb="FC1-3"' in req_names
+
+    top = {
+        1: {"name": "FC1-1", "address": 1, "model": "IC", "slaves": []},
+        2: {"name": "RM107", "address": 2, "model": "IC", "slaves": [3]},
+    }
+    req_full_top = build_set_full_topology_request(top, floor_mappings={1: 1, 2: 1})
+    assert 'Group="1" GroupNameWeb="FC1-1"' in req_full_top
+    assert 'Group="2" GroupNameWeb="RM107"' in req_full_top
+    assert 'Group="2" Model="IC" Address="3"' in req_full_top
+    assert 'FloorGroupRecord Group="2" Floor="1"' in req_full_top
+
