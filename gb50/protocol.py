@@ -755,6 +755,7 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
         name = meta.get("name", f"Group {gid}")
         address = meta.get("address", gid)
         slaves = meta.get("slaves", [])
+        floor = meta.get("floor", 1)
         
         bulk_hex = mnet.attrib.get("Bulk")
         if bulk_hex and len(bulk_hex) >= 130:
@@ -762,6 +763,7 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
             status = GroupStatus(
                 group_id=gid,
                 name=name,
+                floor=floor,
                 model=parsed["model"],
                 address=address,
                 slave_addresses=slaves,
@@ -795,6 +797,7 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
             status = GroupStatus(
                 group_id=gid,
                 name=name,
+                floor=floor,
                 model=model,
                 address=address,
                 slave_addresses=slaves,
