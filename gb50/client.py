@@ -30,6 +30,10 @@ from .protocol import (
     build_get_topology_request,
     build_set_group_name_request,
     build_set_group_topology_request,
+    build_delete_group_request,
+    build_get_floor_mapping_request,
+    parse_floor_mapping,
+    build_set_floor_mapping_request,
     build_get_groups_telemetry_request,
     build_set_group_request,
     build_set_groups_batch_request,
@@ -163,8 +167,9 @@ class GB50Client:
         model: str = "IC",
         slave_ics: Optional[List[int]] = None,
         rcs: Optional[List[int]] = None,
+        floor: Optional[int] = None,
     ) -> bool:
-        """Configure group name, primary unit address, slave units, and remote controllers."""
+        """Configure group name, primary unit address, slave units, remote controllers, and floor."""
         xml_req = build_set_group_topology_request(
             group_id=group_id,
             name=name,
@@ -172,11 +177,35 @@ class GB50Client:
             model=model,
             slave_ics=slave_ics,
             rcs=rcs,
+            floor=floor,
         )
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
         check_error_response(root, raw_xml=xml_resp)
         self._topology_cache = None
+        return True
+
+    async def delete_group(self, group_id: int) -> bool:
+        """Delete an HVAC group and unassign its devices and floor from controller memory."""
+        xml_req = build_delete_group_request(group_id)
+        xml_resp = await self._send_xml(xml_req)
+        root = ET.fromstring(xml_resp)
+        check_error_response(root, raw_xml=xml_resp)
+        self._topology_cache = None
+        return True
+
+    async def get_floor_mappings(self) -> Dict[int, int]:
+        """Fetch floor assignments for all groups {group_id: floor_number}."""
+        xml_req = build_get_floor_mapping_request()
+        xml_resp = await self._send_xml(xml_req)
+        return parse_floor_mapping(xml_resp)
+
+    async def set_group_floor(self, group_id: int, floor: int) -> bool:
+        """Assign an HVAC group to a specific floor (1..10)."""
+        xml_req = build_set_floor_mapping_request(group_id, floor)
+        xml_resp = await self._send_xml(xml_req)
+        root = ET.fromstring(xml_resp)
+        check_error_response(root, raw_xml=xml_resp)
         return True
 
     async def get_all_groups(self, refresh_topology: bool = False) -> List[GroupStatus]:

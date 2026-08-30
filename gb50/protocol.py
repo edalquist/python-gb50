@@ -145,8 +145,9 @@ def build_set_group_topology_request(
     model: str = "IC",
     slave_ics: Optional[List[int]] = None,
     rcs: Optional[List[int]] = None,
+    floor: Optional[int] = None,
 ) -> str:
-    """Build request to configure a group's name, primary address, slaves, and remote controllers."""
+    """Build request to configure a group's name, primary address, slaves, remote controllers, and floor."""
     clean_name = name.replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
     records = []
     # Primary unit
@@ -158,6 +159,14 @@ def build_set_group_topology_request(
     for rc in (rcs or []):
         records.append(f'        <MnetGroupRecord Group="{group_id}" Model="RC" Address="{rc}" />\r\n')
 
+    floor_xml = ""
+    if floor is not None and floor > 0:
+        floor_xml = (
+            f'      <FloorGroupList>\r\n'
+            f'        <FloorGroupRecord Group="{group_id}" Floor="{floor}" />\r\n'
+            f'      </FloorGroupList>\r\n'
+        )
+
     body = (
         f'    <ControlGroup>\r\n'
         f'      <MnetList>\r\n'
@@ -166,6 +175,63 @@ def build_set_group_topology_request(
         f'      <MnetGroupList>\r\n'
         f'{"".join(records)}'
         f'      </MnetGroupList>\r\n'
+        f'{floor_xml}'
+        f'    </ControlGroup>\r\n'
+    )
+    return wrap_packet("setRequest", body)
+
+
+def build_delete_group_request(group_id: int) -> str:
+    """Build request to delete an HVAC group and unassign its devices and floor."""
+    body = (
+        f'    <ControlGroup>\r\n'
+        f'      <MnetList>\r\n'
+        f'        <MnetRecord Group="{group_id}" GroupNameWeb="" />\r\n'
+        f'      </MnetList>\r\n'
+        f'      <FloorGroupList>\r\n'
+        f'        <FloorGroupRecord Group="{group_id}" Floor="0" />\r\n'
+        f'      </FloorGroupList>\r\n'
+        f'    </ControlGroup>\r\n'
+    )
+    return wrap_packet("setRequest", body)
+
+
+def build_get_floor_mapping_request() -> str:
+    """Build request to query floor group mappings."""
+    body = (
+        '    <ControlGroup>\r\n'
+        '      <FloorGroupList><FloorGroupRecord /></FloorGroupList>\r\n'
+        '      <FloorList><FloorRecord /></FloorList>\r\n'
+        '    </ControlGroup>\r\n'
+    )
+    return wrap_packet("getRequest", body)
+
+
+def parse_floor_mapping(xml_str: str) -> Dict[int, int]:
+    """Parse FloorGroupRecord mappings into {group_id: floor_number}."""
+    root = ET.fromstring(xml_str)
+    mapping = {}
+    for elem in root.findall(".//FloorGroupRecord"):
+        gid_str = elem.get("Group")
+        floor_str = elem.get("Floor")
+        if gid_str and floor_str:
+            try:
+                gid = int(gid_str)
+                floor = int(floor_str)
+                if floor > 0:
+                    mapping[gid] = floor
+            except ValueError:
+                continue
+    return mapping
+
+
+def build_set_floor_mapping_request(group_id: int, floor: int) -> str:
+    """Build request to assign an HVAC group to a specific floor."""
+    body = (
+        f'    <ControlGroup>\r\n'
+        f'      <FloorGroupList>\r\n'
+        f'        <FloorGroupRecord Group="{group_id}" Floor="{floor}" />\r\n'
+        f'      </FloorGroupList>\r\n'
         f'    </ControlGroup>\r\n'
     )
     return wrap_packet("setRequest", body)

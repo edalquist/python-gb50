@@ -128,3 +128,54 @@ def test_parse_error_response():
         parse_system_info(xml)
     assert exc_info.value.point == "SetTemp"
     assert exc_info.value.code == "0101"
+
+
+def test_group_crud_and_floor_protocol():
+    from gb50.protocol import (
+        build_set_group_topology_request,
+        build_delete_group_request,
+        build_get_floor_mapping_request,
+        parse_floor_mapping,
+        build_set_floor_mapping_request,
+    )
+
+    req_set = build_set_group_topology_request(
+        group_id=31,
+        name="Youth Room",
+        primary_ic=31,
+        model="IC",
+        slave_ics=[32],
+        rcs=[131],
+        floor=2,
+    )
+    assert 'GroupNameWeb="Youth Room"' in req_set
+    assert 'Group="31" Model="IC" Address="31"' in req_set
+    assert 'Group="31" Model="IC" Address="32"' in req_set
+    assert 'Group="31" Model="RC" Address="131"' in req_set
+    assert 'FloorGroupRecord Group="31" Floor="2"' in req_set
+
+    req_del = build_delete_group_request(31)
+    assert 'GroupNameWeb=""' in req_del
+    assert 'FloorGroupRecord Group="31" Floor="0"' in req_del
+
+    req_flr = build_set_floor_mapping_request(15, 1)
+    assert 'FloorGroupRecord Group="15" Floor="1"' in req_flr
+
+    xml_floor = """<?xml version="1.0" encoding="UTF-8"?>
+<Packet>
+  <Command>getResponse</Command>
+  <DatabaseManager>
+    <ControlGroup>
+      <FloorGroupList>
+        <FloorGroupRecord Group="1" Floor="1" />
+        <FloorGroupRecord Group="2" Floor="1" />
+        <FloorGroupRecord Group="20" Floor="2" />
+      </FloorGroupList>
+    </ControlGroup>
+  </DatabaseManager>
+</Packet>"""
+    mapping = parse_floor_mapping(xml_floor)
+    assert mapping[1] == 1
+    assert mapping[2] == 1
+    assert mapping[20] == 2
+
