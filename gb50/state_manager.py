@@ -173,12 +173,11 @@ class StateManager:
         return self._groups_cache[group_id]
 
     async def apply_preset(self, preset_name: str) -> List[GroupStatus]:
-        """Apply pre-configured church operations presets."""
+        """Apply batch presets to indoor and ventilation units."""
         updates: Dict[int, GroupControlRequest] = {}
         all_ids = list(self._groups_cache.keys())
 
-        if preset_name == "sunday":
-            # Sunday Service: Sanctuary & Halls to 70°F Auto, LOSSNAY ON
+        if preset_name in ("all_on", "sunday"):
             for gid, g in self._groups_cache.items():
                 if g.model == ModelType.IC:
                     updates[gid] = GroupControlRequest(
@@ -190,15 +189,29 @@ class StateManager:
                 elif g.model == ModelType.LC:
                     updates[gid] = GroupControlRequest(
                         drive=DriveState.ON,
-                        fan_speed=FanSpeed.HIGH,
+                        fan_speed=FanSpeed.AUTO,
                     )
         elif preset_name == "all_off":
             for gid in all_ids:
                 updates[gid] = GroupControlRequest(drive=DriveState.OFF)
-        elif preset_name == "office":
-            # Weekday Office: Groups named office ON to 71°F, Sanctuary OFF
+        elif preset_name == "occupied":
             for gid, g in self._groups_cache.items():
-                if 'office' in g.name.lower():
+                if g.model == ModelType.IC:
+                    updates[gid] = GroupControlRequest(
+                        drive=DriveState.ON,
+                        mode=OperationMode.AUTO,
+                        set_temp_f=70.0,
+                    )
+        elif preset_name in ("unoccupied", "night"):
+            for gid, g in self._groups_cache.items():
+                if g.model == ModelType.IC:
+                    updates[gid] = GroupControlRequest(
+                        drive=DriveState.OFF,
+                        set_temp_f=64.0,
+                    )
+        elif preset_name == "office":
+            for gid, g in self._groups_cache.items():
+                if getattr(g, 'floor', 1) == 1:
                     updates[gid] = GroupControlRequest(
                         drive=DriveState.ON,
                         mode=OperationMode.AUTO,
@@ -206,14 +219,6 @@ class StateManager:
                     )
                 else:
                     updates[gid] = GroupControlRequest(drive=DriveState.OFF)
-        elif preset_name == "night":
-            # Night Setback: Set all heat to 62°F, cool to 82°F
-            for gid, g in self._groups_cache.items():
-                if g.model == ModelType.IC:
-                    updates[gid] = GroupControlRequest(
-                        drive=DriveState.OFF,
-                        set_temp_f=64.0,
-                    )
         else:
             raise ValueError(f"Unknown preset: {preset_name}")
 
