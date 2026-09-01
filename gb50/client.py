@@ -108,7 +108,9 @@ class GB50Client:
         self._owns_session = session is None
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self._topology_cache: Optional[Dict[int, Dict[str, Any]]] = None
-        self._lock = asyncio.Lock()
+        self._topology_lock = asyncio.Lock()
+        self._http_lock = asyncio.Lock()
+        self._lock = self._topology_lock
 
     async def __aenter__(self) -> GB50Client:
         if self._session is None:
@@ -124,33 +126,47 @@ class GB50Client:
         if self._owns_session and self._session is not None and not self._session.closed:
             await self._session.close()
 
-    async def _send_xml(self, xml_payload: str) -> str:
-        """Post XML packet to the controller and return response text."""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=self.timeout)
-            self._owns_session = True
-
+    async def _send_xml(self, xml_payload: str, max_retries: int = 2) -> str:
+        """Post XML packet to the controller and return response text with serialized socket access and retry."""
         headers = {
             "Content-Type": "text/xml; charset=utf-8",
             "Connection": "close",
         }
         
-        logger.debug("Sending XML to %s:\n%s", self.url, _redact_xml(xml_payload))
+        async with self._http_lock:
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession(timeout=self.timeout)
+                self._owns_session = True
 
-        try:
-            async with self._session.post(self.url, data=xml_payload.encode("utf-8"), headers=headers) as resp:
-                body = await resp.text(encoding="utf-8", errors="replace")
-                logger.debug("Received XML (HTTP %s) from %s:\n%s", resp.status, self.url, _redact_xml(body))
-                
-                if resp.status not in (200, 500):
-                    logger.error("Unexpected HTTP status %s from controller %s. Response body:\n%s", resp.status, self.url, _redact_xml(body))
-                    resp.raise_for_status()
-                if resp.status == 500 and not body.strip().startswith("<"):
-                    raise GB50TransportError(f"HTTP 500 from controller: {body[:200]}", status_code=resp.status, response_body=body)
-                return body
-        except Exception as ex:
-            logger.error("HTTP error communicating with GB-50 at %s: %s\nRequest payload was:\n%s", self.url, ex, _redact_xml(xml_payload))
-            raise
+            logger.debug("Sending XML to %s:\n%s", self.url, _redact_xml(xml_payload))
+
+            for attempt in range(max_retries + 1):
+                try:
+                    async with self._session.post(self.url, data=xml_payload.encode("utf-8"), headers=headers) as resp:
+                        body = await resp.text(encoding="utf-8", errors="replace")
+                        logger.debug("Received XML (HTTP %s) from %s:\n%s", resp.status, self.url, _redact_xml(body))
+                        
+                        if resp.status not in (200, 500):
+                            logger.error("Unexpected HTTP status %s from controller %s. Response body:\n%s", resp.status, self.url, _redact_xml(body))
+                            resp.raise_for_status()
+                        if resp.status == 500 and not body.strip().startswith("<"):
+                            raise GB50TransportError(f"HTTP 500 from controller: {body[:200]}", status_code=resp.status, response_body=body)
+                        return body
+                except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as ex:
+                    if attempt < max_retries:
+                        backoff = 0.2 * (attempt + 1)
+                        logger.warning(
+                            "Transient transport error communicating with GB-50 at %s: %s. Retrying in %.2fs (attempt %d/%d)...",
+                            self.url, ex, backoff, attempt + 1, max_retries
+                        )
+                        if self._owns_session and self._session is not None and not self._session.closed:
+                            await self._session.close()
+                        self._session = aiohttp.ClientSession(timeout=self.timeout)
+                        self._owns_session = True
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error("HTTP error communicating with GB-50 at %s: %s\nRequest payload was:\n%s", self.url, ex, _redact_xml(xml_payload))
+                        raise
 
     async def get_system_info(self) -> SystemInfo:
         """Fetch controller hardware metadata, firmware version, and licensed functions."""
@@ -171,7 +187,7 @@ class GB50Client:
         if self._topology_cache is not None and not force_refresh:
             return copy.deepcopy(self._topology_cache)
         
-        async with self._lock:
+        async with self._topology_lock:
             if self._topology_cache is not None and not force_refresh:
                 return copy.deepcopy(self._topology_cache)
             xml_req = build_get_topology_request()
