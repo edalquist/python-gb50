@@ -180,7 +180,9 @@ class GB50Client:
             try:
                 floor_map = await self.get_floor_mappings()
                 for gid, info in top.items():
-                    info["floor"] = floor_map.get(gid)
+                    floor_val = floor_map.get(gid)
+                    if floor_val is not None:
+                        info["floor"] = floor_val
             except Exception:
                 pass
             self._topology_cache = top

@@ -779,7 +779,7 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
         name = meta.get("name", f"Group {gid}")
         address = meta.get("address", gid)
         slaves = meta.get("slaves", [])
-        floor = meta.get("floor", 1)
+        floor = meta.get("floor") if meta.get("floor") is not None else 1
         
         bulk_hex = mnet.attrib.get("Bulk")
         if bulk_hex and len(bulk_hex) >= 130:
