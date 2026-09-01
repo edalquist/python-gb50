@@ -7,6 +7,7 @@ import xml.sax.saxutils as saxutils
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+from .exceptions import GB50ProtocolError, GB50ParseError
 from .constants import (
     DriveState,
     OperationMode,
@@ -36,16 +37,6 @@ def escape_xml_attr(val: Any, max_len: Optional[int] = None) -> str:
     return saxutils.escape(s, entities={'"': "&quot;", "'": "&apos;"})
 
 
-class GB50ProtocolError(Exception):
-    """Protocol-level error returned by the GB-50 controller."""
-    def __init__(self, message: str, point: str = "", code: str = "", raw_xml: str = ""):
-        detail = f"{message} (Point='{point}', Code='{code}')" if point or code else message
-        super().__init__(detail)
-        self.point = point
-        self.code = code
-        self.raw_xml = raw_xml
-
-
 def wrap_packet(command: str, body_xml: str) -> str:
     """Wrap XML body inside standard GB-50 <Packet> envelope."""
     return (
@@ -68,7 +59,7 @@ def check_error_response(root: ET.Element, raw_xml: str = "") -> None:
             point = err.attrib.get("Point", "")
             code = err.attrib.get("Code", "")
             msg = err.attrib.get("Message", "Unknown Controller Error")
-            raise GB50ProtocolError(msg, point=point, code=code, raw_xml=raw_xml)
+            raise GB50ProtocolError(f"{msg} (Point='{point}', Code='{code}')", point=point, code=code, error_code=int(code) if code.isdigit() else None, raw_xml=raw_xml)
         raise GB50ProtocolError("Controller returned getErrorResponse", raw_xml=raw_xml)
 
 
@@ -432,19 +423,29 @@ def build_get_weekly_schedule_request(group_id: int, season: int = 1) -> str:
 
 def build_set_today_schedule_request(group_ids: List[int], events: List[Dict[str, Any]]) -> str:
     """Build request to update today's schedule for one or more groups."""
+    if len(events) > 16:
+        raise ValueError(f"Maximum 16 timer events per day supported by GB-50 controller (got {len(events)})")
+
     lists = []
     for gid in group_ids:
+        if not (1 <= gid <= 50):
+            raise ValueError(f"Invalid group ID {gid}: must be between 1 and 50")
         rec_lines = []
         for idx, ev in enumerate(events, 1):
-            hr = ev.get("hour", 0)
-            mn = ev.get("minute", 0)
-            drive = ev.get("drive", "ON")
-            mode = ev.get("mode", "AUTO")
+            hr = int(ev.get("hour", 0))
+            mn = int(ev.get("minute", 0))
+            if not (0 <= hr <= 23):
+                raise ValueError(f"Invalid event hour {hr}: must be between 0 and 23")
+            if not (0 <= mn <= 59):
+                raise ValueError(f"Invalid event minute {mn}: must be between 0 and 59")
+
+            drive = escape_xml_attr(ev.get("drive", "ON"))
+            mode = escape_xml_attr(ev.get("mode", "AUTO"))
             set_temp = ev.get("set_temp_c")
             st_attr = f'SetTemp="{set_temp:.1f}" ' if set_temp is not None else ''
-            fan = ev.get("fan_speed", "AUTO")
+            fan = escape_xml_attr(ev.get("fan_speed", ""))
             fan_attr = f'FanSpeed="{fan}" ' if fan else ''
-            air_dir = ev.get("air_direction", "")
+            air_dir = escape_xml_attr(ev.get("air_direction", ""))
             air_attr = f'AirDirection="{air_dir}" ' if air_dir else ''
             rec_lines.append(
                 f'        <TodayRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" {st_attr}{fan_attr}{air_attr}/>\r\n'
@@ -458,19 +459,31 @@ def build_set_today_schedule_request(group_ids: List[int], events: List[Dict[str
 
 def build_set_weekly_schedule_request(group_ids: List[int], day_of_week: int, events: List[Dict[str, Any]], season: int = 1) -> str:
     """Build request to update weekly schedule pattern (day 1..7) for one or more groups."""
+    if not (1 <= day_of_week <= 7):
+        raise ValueError(f"Invalid day_of_week {day_of_week}: must be between 1 (Monday) and 7 (Sunday)")
+    if len(events) > 16:
+        raise ValueError(f"Maximum 16 timer events per day supported by GB-50 controller (got {len(events)})")
+
     lists = []
     for gid in group_ids:
+        if not (1 <= gid <= 50):
+            raise ValueError(f"Invalid group ID {gid}: must be between 1 and 50")
         rec_lines = []
         for idx, ev in enumerate(events, 1):
-            hr = ev.get("hour", 0)
-            mn = ev.get("minute", 0)
-            drive = ev.get("drive", "ON")
-            mode = ev.get("mode", "AUTO")
+            hr = int(ev.get("hour", 0))
+            mn = int(ev.get("minute", 0))
+            if not (0 <= hr <= 23):
+                raise ValueError(f"Invalid event hour {hr}: must be between 0 and 23")
+            if not (0 <= mn <= 59):
+                raise ValueError(f"Invalid event minute {mn}: must be between 0 and 59")
+
+            drive = escape_xml_attr(ev.get("drive", "ON"))
+            mode = escape_xml_attr(ev.get("mode", "AUTO"))
             set_temp = ev.get("set_temp_c")
             st_attr = f'SetTemp="{set_temp:.1f}" ' if set_temp is not None else ''
-            fan = ev.get("fan_speed", "AUTO")
+            fan = escape_xml_attr(ev.get("fan_speed", ""))
             fan_attr = f'FanSpeed="{fan}" ' if fan else ''
-            air_dir = ev.get("air_direction", "")
+            air_dir = escape_xml_attr(ev.get("air_direction", ""))
             air_attr = f'AirDirection="{air_dir}" ' if air_dir else ''
             rec_lines.append(
                 f'        <WPatternRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" {st_attr}{fan_attr}{air_attr}/>\r\n'

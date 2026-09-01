@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Any
+import copy
+import re
+from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
 import aiohttp
 import asyncio
@@ -23,8 +25,13 @@ from .models import (
     AlarmRecord,
     GroupControlRequest,
 )
-from .protocol import (
+from .exceptions import (
+    GB50Error,
     GB50ProtocolError,
+    GB50TransportError,
+    GB50ParseError,
+)
+from .protocol import (
     build_get_system_info_request,
     build_set_system_data_request,
     build_get_topology_request,
@@ -74,6 +81,15 @@ from .crypto import encrypt, decrypt, create_key
 
 logger = logging.getLogger("gb50.client")
 
+RE_REDACT_ATTR = re.compile(r'((?:Password|PasswordKey|AuthKey|AuthID)=")([^"]*)(")', re.IGNORECASE)
+
+
+def _redact_xml(xml_payload: str) -> str:
+    """Mask sensitive credentials in XML before logging."""
+    if not xml_payload:
+        return ""
+    return RE_REDACT_ATTR.sub(r'\1***REDACTED***\3', xml_payload)
+
 
 class GB50Client:
     """Asynchronous client for Mitsubishi GB-50 series HVAC central controllers."""
@@ -119,19 +135,21 @@ class GB50Client:
             "Connection": "close",
         }
         
-        logger.debug("Sending XML to %s:\n%s", self.url, xml_payload)
+        logger.debug("Sending XML to %s:\n%s", self.url, _redact_xml(xml_payload))
 
         try:
             async with self._session.post(self.url, data=xml_payload.encode("utf-8"), headers=headers) as resp:
                 body = await resp.text(encoding="utf-8", errors="replace")
-                logger.debug("Received XML (HTTP %s) from %s:\n%s", resp.status, self.url, body)
+                logger.debug("Received XML (HTTP %s) from %s:\n%s", resp.status, self.url, _redact_xml(body))
                 
                 if resp.status not in (200, 500):
-                    logger.error("Unexpected HTTP status %s from controller %s. Response body:\n%s", resp.status, self.url, body)
+                    logger.error("Unexpected HTTP status %s from controller %s. Response body:\n%s", resp.status, self.url, _redact_xml(body))
                     resp.raise_for_status()
+                if resp.status == 500 and not body.strip().startswith("<"):
+                    raise GB50TransportError(f"HTTP 500 from controller: {body[:200]}", status_code=resp.status, response_body=body)
                 return body
         except Exception as ex:
-            logger.error("HTTP error communicating with GB-50 at %s: %s\nRequest payload was:\n%s", self.url, ex, xml_payload)
+            logger.error("HTTP error communicating with GB-50 at %s: %s\nRequest payload was:\n%s", self.url, ex, _redact_xml(xml_payload))
             raise
 
     async def get_system_info(self) -> SystemInfo:
@@ -151,15 +169,22 @@ class GB50Client:
     async def get_topology(self, force_refresh: bool = False) -> Dict[int, Dict[str, Any]]:
         """Discover all configured groups, web display names, and M-Net hardware addresses."""
         if self._topology_cache is not None and not force_refresh:
-            return self._topology_cache
+            return copy.deepcopy(self._topology_cache)
         
         async with self._lock:
             if self._topology_cache is not None and not force_refresh:
-                return self._topology_cache
+                return copy.deepcopy(self._topology_cache)
             xml_req = build_get_topology_request()
             xml_resp = await self._send_xml(xml_req)
-            self._topology_cache = parse_topology(xml_resp)
-            return self._topology_cache
+            top = parse_topology(xml_resp)
+            try:
+                floor_map = await self.get_floor_mappings()
+                for gid, info in top.items():
+                    info["floor"] = floor_map.get(gid)
+            except Exception:
+                pass
+            self._topology_cache = top
+            return copy.deepcopy(self._topology_cache)
 
     async def set_group_topology(
         self,
@@ -173,7 +198,7 @@ class GB50Client:
     ) -> bool:
         """Configure group name, primary unit address, slave units, remote controllers, and floor, preserving all other groups."""
         top = await self.get_topology()
-        # Merge updated group into full topology map
+        # Merge updated group into full topology map (top is already a deep copy)
         top[group_id] = {
             "name": name,
             "address": primary_ic,
@@ -244,10 +269,14 @@ class GB50Client:
 
     async def get_groups_telemetry(self, group_ids: Optional[List[int]] = None) -> List[GroupStatus]:
         """Fetch real-time telemetry for specified group IDs (or all groups if None)."""
+        if group_ids is not None and len(group_ids) == 0:
+            return []
         topology = await self.get_topology()
         if not topology:
             return []
         target_ids = group_ids if group_ids is not None else sorted(topology.keys())
+        if not target_ids:
+            return []
         xml_req = build_get_groups_telemetry_request(target_ids)
         xml_resp = await self._send_xml(xml_req)
         return parse_groups_telemetry(xml_resp, topology=topology)
@@ -272,9 +301,12 @@ class GB50Client:
         air_direction: Optional[AirDirection] = None,
         fan_speed: Optional[FanSpeed] = None,
         remote_lock: Optional[RemoteControlPermission] = None,
+        update: Optional[GroupControlRequest] = None,
     ) -> bool:
         """Send command to control an HVAC group."""
-        if isinstance(drive, GroupControlRequest):
+        if update is not None:
+            req = update
+        elif isinstance(drive, GroupControlRequest):
             req = drive
         else:
             req = GroupControlRequest(
@@ -504,7 +536,7 @@ class GB50Client:
             return ua.attrib["AuthKey"]
         raise GB50ProtocolError("Missing AuthKey in controller response", raw_xml=xml_resp)
 
-    async def get_users(self, category: str = "Administrator") -> List[Dict[str, Any]]:
+    async def get_users(self, category: str = "Administrator", include_passwords: bool = False) -> List[Dict[str, Any]]:
         """Retrieve user accounts for a given category (Administrator, Maintenance, PublicUser)."""
         auth_key = await self.get_auth_key()
         auth_id = encrypt("UserList", auth_key)
@@ -526,13 +558,15 @@ class GB50Client:
             p_enc = rec.attrib.get("Password", "")
             pk_str = rec.attrib.get("PasswordKey", "")
             ag = rec.attrib.get("AvailableGroup", "FFFFFFFFFFFFFFFF")
-            dec_pw = decrypt(p_enc, int(pk_str)) if p_enc and pk_str and pk_str.isdigit() else ""
-            users.append({
+            user_data: Dict[str, Any] = {
                 "user": u,
-                "password": dec_pw,
                 "category": category,
                 "available_group": ag,
-            })
+            }
+            if include_passwords:
+                dec_pw = decrypt(p_enc, int(pk_str)) if p_enc and pk_str and pk_str.isdigit() else ""
+                user_data["password"] = dec_pw
+            users.append(user_data)
         return users
 
     async def set_user_password(self, user: str, new_password: str) -> bool:

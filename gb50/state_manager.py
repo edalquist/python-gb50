@@ -24,12 +24,17 @@ class StateManager:
         self._groups_cache: Dict[int, GroupStatus] = {}
         self._listeners: Set[Callable[[GroupStatus], Any]] = set()
         self._raw_subscribers: Set[Any] = set()
+        self._active_listener_tasks: Set[asyncio.Task] = set()
         self._poll_task: Optional[asyncio.Task] = None
         self._running = False
         self._lock = asyncio.Lock()
 
     async def start(self) -> None:
         """Start background polling worker."""
+        if self._running or (self._poll_task and not self._poll_task.done()):
+            logger.warning("GB-50 state manager is already running")
+            return
+
         self._running = True
         logger.info(f"Starting GB-50 state manager (target: {self.client.host}, poll: {self.poll_interval}s)")
         
@@ -55,6 +60,11 @@ class StateManager:
                 await self._poll_task
             except asyncio.CancelledError:
                 pass
+        
+        for task in list(self._active_listener_tasks):
+            if not task.done():
+                task.cancel()
+        self._active_listener_tasks.clear()
         logger.info("GB-50 state manager stopped")
 
     @property
@@ -307,7 +317,13 @@ class StateManager:
                 try:
                     res = listener(g)
                     if asyncio.iscoroutine(res):
-                        asyncio.create_task(res)
+                        task = asyncio.create_task(res)
+                        self._active_listener_tasks.add(task)
+                        task.add_done_callback(self._active_listener_tasks.discard)
+                        task.add_done_callback(
+                            lambda t: logger.error(f"Error in async state listener: {t.exception()}")
+                            if not t.cancelled() and t.exception() else None
+                        )
                 except Exception as e:
                     logger.error(f"Error in state listener: {e}")
 

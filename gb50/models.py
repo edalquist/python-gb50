@@ -121,11 +121,22 @@ class GroupControlRequest(BaseModel):
     remote_lock: Optional[RemoteControlPermission] = None
 
     def resolved_set_temp_c(self) -> Optional[float]:
-        """Resolve setpoint in Celsius, giving precedence to explicit set_temp_c or converting set_temp_f."""
+        """Resolve setpoint in Celsius, validating reasonable operating limits (10..35°C / 50..95°F)."""
+        if self.set_temp_c is not None and self.set_temp_f is not None:
+            conv_c = f_to_c(self.set_temp_f)
+            if conv_c is not None and abs(self.set_temp_c - conv_c) > 1.5:
+                raise ValueError(f"Conflicting set_temp_c ({self.set_temp_c}°C) and set_temp_f ({self.set_temp_f}°F)")
+        
+        target_c = None
         if self.set_temp_c is not None:
-            return self.set_temp_c
-        if self.set_temp_f is not None:
-            return f_to_c(self.set_temp_f)
+            target_c = self.set_temp_c
+        elif self.set_temp_f is not None:
+            target_c = f_to_c(self.set_temp_f)
+            
+        if target_c is not None:
+            if not (10.0 <= target_c <= 35.0):
+                raise ValueError(f"Target temperature {target_c:.1f}°C is out of allowable bounds (10.0°C to 35.0°C)")
+            return round(target_c, 1)
         return None
 
 

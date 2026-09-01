@@ -13,7 +13,7 @@ This library is pure async Python, designed to be embedded directly into **Home 
 
 - **Full Async / Non-Blocking**: Built on `aiohttp` and `asyncio`.
 - **High-Speed Batch Telemetry**: Unpacks the proprietary 65-byte `Bulk` hex status payload to monitor up to 50 indoor units and LOSSNAYs in a single HTTP request.
-- **Proprietary Cryptographic Engine**: Built-in DES / XOR cipher for hardware password authentication and privilege elevation (`UserList`, `admin`).
+- **Proprietary Cryptographic Engine**: Built-in Mitsubishi rolling substitution cipher for hardware password authentication and privilege elevation (`UserList`, `admin`).
 - **Real-Time State Manager & Polling Engine**: In-memory caching, delta state computation, and asynchronous pub-sub event listener callbacks.
 - **Weekly & Daily Scheduling**: View and set daily timer events (`TodayList`) and 7-day weekly schedule patterns (`WPatternList`) with single-group or multi-group bitmasks.
 - **Mitsubishi City Multi Diagnostics**: Full 4-digit error code knowledge base with plain-English causes, timestamps, outage durations, and troubleshooting steps.

@@ -41,11 +41,34 @@ def test_parse_lossnay_unit_bulk():
 
 
 def test_invalid_bulk_length():
-    with pytest.raises(ValueError, match="Invalid bulk payload length"):
+    from gb50.exceptions import GB50ParseError
+    with pytest.raises(GB50ParseError, match="Invalid bulk payload length"):
         parse_bulk_telemetry("010002")
 
 
 def test_invalid_bulk_header():
-    with pytest.raises(ValueError, match="Invalid bulk packet header"):
+    from gb50.exceptions import GB50ParseError
+    with pytest.raises(GB50ParseError, match="Invalid bulk packet header"):
         # Header byte is 0x02 instead of 0x01
         parse_bulk_telemetry("02" + "00" * 64)
+
+
+def test_unknown_drive_code_raises():
+    from gb50.exceptions import GB50ParseError
+    # Byte 1 is 0xFF (unknown drive)
+    hex_data = "01FF02140000E6040601000000000000001F0000000100010000010000000000000000000000000000000000000000000000000000000000000000000000000000"
+    with pytest.raises(GB50ParseError) as exc_info:
+        parse_bulk_telemetry(hex_data)
+    assert exc_info.value.byte_index == 1
+    assert "Unknown bulk drive code" in str(exc_info.value)
+
+
+def test_unknown_mode_code_raises():
+    from gb50.exceptions import GB50ParseError
+    # Byte 2 is 0xFE (unknown mode)
+    hex_data = "0100FE140000E6040601000000000000001F0000000100010000010000000000000000000000000000000000000000000000000000000000000000000000000000"
+    with pytest.raises(GB50ParseError) as exc_info:
+        parse_bulk_telemetry(hex_data)
+    assert exc_info.value.byte_index == 2
+    assert "Unknown bulk operation mode code" in str(exc_info.value)
+

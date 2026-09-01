@@ -3,6 +3,7 @@
 from typing import Dict, Any, Optional
 import struct
 
+from .exceptions import GB50ParseError
 from .constants import (
     DriveState,
     OperationMode,
@@ -44,17 +45,21 @@ def parse_bulk_telemetry(bulk_hex: str) -> Dict[str, Any]:
         Dictionary of decoded telemetry fields, temperatures, and capability flags.
     """
     if not bulk_hex or len(bulk_hex) < 130:
-        raise ValueError(f"Invalid bulk payload length: expected 130 hex chars, got {len(bulk_hex) if bulk_hex else 0}")
+        raise GB50ParseError(f"Invalid bulk payload length: expected 130 hex chars, got {len(bulk_hex) if bulk_hex else 0}")
     
     data = bytes.fromhex(bulk_hex[:130])
     if data[0] != 0x01:
-        raise ValueError(f"Invalid bulk packet header: expected 0x01, got {data[0]:#04x}")
+        raise GB50ParseError(f"Invalid bulk packet header: expected 0x01, got {data[0]:#04x}", byte_index=0, raw_value=data[0])
 
     # 1. Drive State (Byte 1)
-    drive = BULK_DRIVE_MAP.get(data[1], DriveState.OFF)
+    if data[1] not in BULK_DRIVE_MAP:
+        raise GB50ParseError(f"Unknown bulk drive code: {data[1]:#04x}", byte_index=1, raw_value=data[1])
+    drive = BULK_DRIVE_MAP[data[1]]
 
     # 2. Mode (Byte 2)
-    mode = BULK_MODE_MAP.get(data[2], OperationMode.AUTO)
+    if data[2] not in BULK_MODE_MAP:
+        raise GB50ParseError(f"Unknown bulk operation mode code: {data[2]:#04x}", byte_index=2, raw_value=data[2])
+    mode = BULK_MODE_MAP[data[2]]
 
     # 3. Target Set Temperature (Bytes 3-4)
     set_int = data[3]
@@ -69,10 +74,14 @@ def parse_bulk_telemetry(bulk_hex: str) -> Dict[str, Any]:
     inlet_temp_c = round(raw_inlet / 10.0, 1)
 
     # 5. Air Direction (Byte 7)
-    air_direction = BULK_AIR_DIR_MAP.get(data[7], AirDirection.HORIZONTAL)
+    if data[7] not in BULK_AIR_DIR_MAP:
+        raise GB50ParseError(f"Unknown bulk air direction code: {data[7]:#04x}", byte_index=7, raw_value=data[7])
+    air_direction = BULK_AIR_DIR_MAP[data[7]]
 
     # 6. Fan Speed (Byte 8)
-    fan_speed = BULK_FAN_SPEED_MAP.get(data[8], FanSpeed.AUTO)
+    if data[8] not in BULK_FAN_SPEED_MAP:
+        raise GB50ParseError(f"Unknown bulk fan speed code: {data[8]:#04x}", byte_index=8, raw_value=data[8])
+    fan_speed = BULK_FAN_SPEED_MAP[data[8]]
 
     # 7. Remote Controller Lock (Byte 9)
     remote_lock = RemoteControlPermission.PROHIBIT if data[9] == 1 else RemoteControlPermission.PERMIT
@@ -82,7 +91,9 @@ def parse_bulk_telemetry(bulk_hex: str) -> Dict[str, Any]:
     error_active = data[16] == 1
 
     # 9. Hardware Model (Byte 17)
-    model = BULK_MODEL_MAP.get(data[17], ModelType.IC)
+    if data[17] not in BULK_MODEL_MAP:
+        raise GB50ParseError(f"Unknown bulk model type code: {data[17]:#04x}", byte_index=17, raw_value=data[17])
+    model = BULK_MODEL_MAP[data[17]]
 
     # 10. Schedule Active (Byte 21)
     schedule_enabled = data[21] == 1

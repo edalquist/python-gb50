@@ -19,7 +19,12 @@ from .models import (
     c_to_f,
     f_to_c,
 )
-from .protocol import GB50ProtocolError
+from .exceptions import (
+    GB50Error,
+    GB50ProtocolError,
+    GB50TransportError,
+    GB50ParseError,
+)
 from .client import GB50Client
 from .state_manager import StateManager
 
@@ -28,7 +33,10 @@ __version__ = "1.0.0"
 __all__ = [
     "GB50Client",
     "StateManager",
+    "GB50Error",
     "GB50ProtocolError",
+    "GB50TransportError",
+    "GB50ParseError",
     "DriveState",
     "OperationMode",
     "AirDirection",
