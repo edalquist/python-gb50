@@ -238,12 +238,16 @@ class StateManager:
             return list(self._groups_cache.values())
 
     async def _poll_loop(self) -> None:
-        """Continuous background polling loop."""
+        """Continuous background polling loop with connection state tracking."""
         while self._running:
             try:
                 await asyncio.sleep(self.poll_interval)
                 new_groups = await self.client.get_groups_telemetry()
                 
+                if not getattr(self, "_controller_connected", True):
+                    self._controller_connected = True
+                    await self._broadcast_status(True)
+
                 changed_groups: List[GroupStatus] = []
                 async with self._lock:
                     for g in new_groups:
@@ -259,6 +263,9 @@ class StateManager:
                 break
             except Exception as ex:
                 logger.warning(f"Error during GB-50 background polling: {ex}")
+                if getattr(self, "_controller_connected", True):
+                    self._controller_connected = False
+                    await self._broadcast_status(False, error=str(ex))
                 await asyncio.sleep(2.0)
 
     def _has_changed(self, a: GroupStatus, b: GroupStatus) -> bool:
@@ -272,6 +279,25 @@ class StateManager:
             a.filter_dirty != b.filter_dirty or
             a.error_active != b.error_active
         )
+
+    async def _broadcast_status(self, connected: bool, error: Optional[str] = None) -> None:
+        """Broadcast controller connection state event over WebSockets."""
+        if not self._raw_subscribers:
+            return
+        payload = {
+            "event": "controller_status",
+            "connected": connected,
+            "error": error,
+            "timestamp": datetime.now().isoformat(),
+        }
+        dead_subs = set()
+        for ws in self._raw_subscribers:
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                dead_subs.add(ws)
+        for ws in dead_subs:
+            self._raw_subscribers.discard(ws)
 
     async def _broadcast_update(self, groups: List[GroupStatus]) -> None:
         """Broadcast state updates to callback listeners and raw WebSocket connections."""
@@ -290,6 +316,7 @@ class StateManager:
             return
 
         payload = {
+            "event": "group_updates",
             "type": "groups_update",
             "timestamp": datetime.now().isoformat(),
             "groups": [g.model_dump() for g in groups],

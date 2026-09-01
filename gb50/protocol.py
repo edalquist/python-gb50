@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+import xml.sax.saxutils as saxutils
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -23,6 +24,16 @@ from .models import (
     GroupControlRequest,
 )
 from .bulk_parser import parse_bulk_telemetry
+
+
+def escape_xml_attr(val: Any, max_len: Optional[int] = None) -> str:
+    """Safely escape a value for XML attribute insertion."""
+    if val is None:
+        return ""
+    s = str(val)
+    if max_len is not None:
+        s = s[:max_len]
+    return saxutils.escape(s, entities={'"': "&quot;", "'": "&apos;"})
 
 
 class GB50ProtocolError(Exception):
@@ -103,7 +114,7 @@ def build_set_system_data_request(settings: Dict[str, Any]) -> str:
     }
     for key, attr_name in field_map.items():
         if key in settings and settings[key] is not None:
-            val = str(settings[key]).replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")
+            val = escape_xml_attr(settings[key])
             attrs.append(f'{attr_name}="{val}"')
     
     if not attrs:
@@ -131,7 +142,7 @@ def build_set_all_group_names_request(names: Dict[int, str]) -> str:
     for gid in sorted(names.keys()):
         name_val = names[gid]
         if name_val:
-            clean_name = str(name_val).replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
+            clean_name = escape_xml_attr(name_val, max_len=20)
             records.append(f'        <MnetRecord Group="{gid}" GroupNameWeb="{clean_name}" />\r\n')
     body = (
         f'    <ControlGroup>\r\n'
@@ -155,7 +166,7 @@ def build_set_full_topology_request(
     for gid in sorted(topology.keys()):
         info = topology[gid]
         name = info.get("name", f"Group {gid}")
-        clean_name = str(name).replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
+        clean_name = escape_xml_attr(name, max_len=20)
         mnet_records.append(f'        <MnetRecord Group="{gid}" GroupNameWeb="{clean_name}" />\r\n')
 
         model = info.get("model", "IC")
@@ -195,7 +206,7 @@ def build_set_full_topology_request(
 
 def build_set_group_name_request(group_id: int, name: str) -> str:
     """Build request to rename a single HVAC group web display name."""
-    clean_name = name.replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
+    clean_name = escape_xml_attr(name, max_len=20)
     body = (
         f'    <ControlGroup>\r\n'
         f'      <MnetList>\r\n'
@@ -216,7 +227,7 @@ def build_set_group_topology_request(
     floor: Optional[int] = None,
 ) -> str:
     """Build request to configure a group's name, primary address, slaves, remote controllers, and floor."""
-    clean_name = name.replace("<", "").replace(">", "").replace("&", "").replace('"', "").replace("'", "")[:20]
+    clean_name = escape_xml_attr(name, max_len=20)
     records = []
     # Primary unit
     records.append(f'        <MnetGroupRecord Group="{group_id}" Model="{model}" Address="{primary_ic}" />\r\n')
