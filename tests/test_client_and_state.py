@@ -11,7 +11,14 @@ from gb50.protocol import (
     build_set_weekly_schedule_request,
 )
 from gb50.models import GroupControlRequest, GroupStatus, SystemInfo
-from gb50.constants import DriveState, OperationMode, ModelType
+from gb50.constants import (
+    DriveState,
+    OperationMode,
+    ModelType,
+    FanSpeed,
+    AirDirection,
+    RemoteControlPermission,
+)
 
 
 def test_redact_xml():
@@ -148,7 +155,202 @@ async def test_get_users_password_privacy():
             assert users_default[0]["user"] == "admin"
             assert "password" not in users_default[0]
 
-            # Explicit include_passwords=True
-            users_with_pw = await client.get_users(category="Administrator", include_passwords=True)
+            # Explicit get_user_decrypted_passwords
+            users_with_pw = await client.get_user_decrypted_passwords(category="Administrator")
             assert len(users_with_pw) == 1
             assert "password" in users_with_pw[0]
+
+
+@pytest.mark.asyncio
+async def test_state_manager_refresh_system_info():
+    mock_client = AsyncMock()
+    mock_client.host = "127.0.0.1"
+    sys_info_1 = SystemInfo(
+        version="2.80",
+        model="GB-50ADA-A",
+        system_name="Initial Name",
+        ip_address="127.0.0.1",
+        subnet_mask="255.255.255.0",
+        gateway="127.0.0.1",
+    )
+    sys_info_2 = SystemInfo(
+        version="2.80",
+        model="GB-50ADA-A",
+        system_name="Updated Name",
+        ip_address="127.0.0.1",
+        subnet_mask="255.255.255.0",
+        gateway="127.0.0.1",
+    )
+    mock_client.get_system_info.side_effect = [sys_info_1, sys_info_2]
+
+    mgr = StateManager(client=mock_client)
+
+    # Initially None
+    assert mgr.system_info is None
+
+    # First get_system_info call fetches from client
+    res1 = await mgr.get_system_info()
+    assert res1.system_name == "Initial Name"
+    assert mgr.system_info.system_name == "Initial Name"
+    assert mock_client.get_system_info.call_count == 1
+
+    # Second get_system_info call returns cached
+    res_cached = await mgr.get_system_info()
+    assert res_cached.system_name == "Initial Name"
+    assert mock_client.get_system_info.call_count == 1
+
+    # refresh_system_info forces a fresh fetch and updates cache
+    res2 = await mgr.refresh_system_info()
+    assert res2.system_name == "Updated Name"
+    assert mgr.system_info.system_name == "Updated Name"
+    assert mock_client.get_system_info.call_count == 2
+
+
+def test_state_manager_has_changed_schedule_and_remote_lock():
+    mgr = StateManager(client=AsyncMock())
+
+    base = GroupStatus(
+        group_id=1,
+        name="Zone 1",
+        address=1,
+        model=ModelType.IC,
+        drive=DriveState.OFF,
+        mode=OperationMode.HEAT,
+        set_temp_c=20.0,
+        inlet_temp_c=22.0,
+        fan_speed=FanSpeed.AUTO,
+        air_direction=AirDirection.HORIZONTAL,
+        filter_dirty=False,
+        error_active=False,
+        schedule_enabled=True,
+        remote_lock=RemoteControlPermission.PERMIT,
+    )
+
+    # Identical state
+    identical = base.model_copy()
+    assert mgr._has_changed(base, identical) is False
+
+    # schedule_enabled change
+    changed_schedule = base.model_copy(update={"schedule_enabled": False})
+    assert mgr._has_changed(base, changed_schedule) is True
+
+    # remote_lock change
+    changed_lock = base.model_copy(update={"remote_lock": RemoteControlPermission.PROHIBIT})
+    assert mgr._has_changed(base, changed_lock) is True
+
+    # drive change
+    changed_drive = base.model_copy(update={"drive": DriveState.ON})
+    assert mgr._has_changed(base, changed_drive) is True
+
+    # mode change
+    changed_mode = base.model_copy(update={"mode": OperationMode.COOL})
+    assert mgr._has_changed(base, changed_mode) is True
+
+    # set_temp_c change
+    changed_temp = base.model_copy(update={"set_temp_c": 22.0})
+    assert mgr._has_changed(base, changed_temp) is True
+
+    # inlet_temp_c change
+    changed_inlet = base.model_copy(update={"inlet_temp_c": 24.0})
+    assert mgr._has_changed(base, changed_inlet) is True
+
+    # filter_dirty change
+    changed_filter = base.model_copy(update={"filter_dirty": True})
+    assert mgr._has_changed(base, changed_filter) is True
+
+    # error_active change
+    changed_error = base.model_copy(update={"error_active": True})
+    assert mgr._has_changed(base, changed_error) is True
+
+
+@pytest.mark.asyncio
+async def test_http_500_html_raises_transport_error():
+    from gb50.exceptions import GB50TransportError
+    import aiohttp
+    from unittest.mock import MagicMock
+
+    client = GB50Client(host="127.0.0.1")
+    
+    mock_resp = AsyncMock()
+    mock_resp.status = 500
+    mock_resp.text.return_value = "<html><body>500 Internal Server Error (Apache)</body></html>"
+
+    mock_session = MagicMock()
+    mock_session.closed = False
+    
+    # context manager for session.post
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_resp
+    mock_session.post.return_value = mock_cm
+
+    client._session = mock_session
+    client._owns_session = False
+
+    with pytest.raises(GB50TransportError, match="HTTP 500 from controller: <html><body>500 Internal Server Error"):
+        await client._send_xml("<Packet/>", max_retries=0)
+
+
+@pytest.mark.asyncio
+async def test_external_session_preservation_on_retry():
+    from unittest.mock import MagicMock
+    from gb50.exceptions import GB50TransportError
+    import aiohttp
+
+    mock_session = MagicMock()
+    mock_session.closed = False
+    mock_session.post.side_effect = aiohttp.ClientConnectionError("Connection reset")
+
+    client = GB50Client(host="127.0.0.1", session=mock_session)
+    assert client._owns_session is False
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        with pytest.raises(GB50TransportError, match="Failed to communicate with GB-50"):
+            await client._send_xml("<Packet/>", max_retries=1)
+
+    # The external session was not closed or replaced
+    assert client._session is mock_session
+    mock_session.close.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_group_floor_invalidates_topology_cache():
+    client = GB50Client(host="127.0.0.1")
+    client._topology_cache = {1: {"name": "Zone 1", "floor": 1}}
+
+    xml_resp = """<?xml version="1.0" encoding="UTF-8"?>
+<Packet>
+  <Command>setResponse</Command>
+  <DatabaseManager>
+    <MnetGroupFloor Group="1" Floor="2" />
+  </DatabaseManager>
+</Packet>"""
+
+    with patch.object(client, "_send_xml", new_callable=AsyncMock, return_value=xml_resp):
+        await client.set_group_floor(1, 2)
+        assert client._topology_cache is None
+
+
+def test_schedule_event_validation_negative():
+    from gb50.protocol import build_set_weekly_schedule_request
+
+    # Invalid drive
+    with pytest.raises(ValueError, match="Invalid drive state 'UNKNOWN'"):
+        build_set_weekly_schedule_request([1], 1, [{"hour": 8, "minute": 0, "drive": "UNKNOWN"}])
+
+    # Invalid mode
+    with pytest.raises(ValueError, match="Invalid operation mode 'TURBO'"):
+        build_set_weekly_schedule_request([1], 1, [{"hour": 8, "minute": 0, "mode": "TURBO"}])
+
+    # Invalid fan speed
+    with pytest.raises(ValueError, match="Invalid fan speed 'HYPER'"):
+        build_set_weekly_schedule_request([1], 1, [{"hour": 8, "minute": 0, "fan_speed": "HYPER"}])
+
+    # Invalid air direction
+    with pytest.raises(ValueError, match="Invalid air direction 'DIAGONAL'"):
+        build_set_weekly_schedule_request([1], 1, [{"hour": 8, "minute": 0, "air_direction": "DIAGONAL"}])
+
+    # Setpoint out of bounds
+    with pytest.raises(ValueError, match="Schedule temperature setpoint 45.0°C out of allowable range"):
+        build_set_weekly_schedule_request([1], 1, [{"hour": 8, "minute": 0, "set_temp_c": 45.0}])
+
+

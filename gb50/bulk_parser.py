@@ -44,10 +44,14 @@ def parse_bulk_telemetry(bulk_hex: str) -> Dict[str, Any]:
     Returns:
         Dictionary of decoded telemetry fields, temperatures, and capability flags.
     """
-    if not bulk_hex or len(bulk_hex) < 130:
-        raise GB50ParseError(f"Invalid bulk payload length: expected 130 hex chars, got {len(bulk_hex) if bulk_hex else 0}")
+    if not bulk_hex or len(bulk_hex) != 130:
+        raise GB50ParseError(f"Invalid bulk payload length: expected exactly 130 hex chars, got {len(bulk_hex) if bulk_hex else 0}")
     
-    data = bytes.fromhex(bulk_hex[:130])
+    try:
+        data = bytes.fromhex(bulk_hex)
+    except ValueError as ex:
+        raise GB50ParseError(f"Invalid hexadecimal encoding in bulk payload: {ex}") from ex
+
     if data[0] != 0x01:
         raise GB50ParseError(f"Invalid bulk packet header: expected 0x01, got {data[0]:#04x}", byte_index=0, raw_value=data[0])
 

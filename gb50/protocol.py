@@ -53,14 +53,21 @@ def wrap_packet(command: str, body_xml: str) -> str:
 def check_error_response(root: ET.Element, raw_xml: str = "") -> None:
     """Check for error elements in the response and raise GB50ProtocolError if present."""
     cmd = root.find("Command")
-    if cmd is not None and "getErrorResponse" in (cmd.text or ""):
-        err = root.find(".//ERROR")
+    cmd_text = (cmd.text or "") if cmd is not None else ""
+    err = root.find(".//ERROR")
+    if "ErrorResponse" in cmd_text or "getErrorResponse" in cmd_text or "setErrorResponse" in cmd_text or err is not None:
         if err is not None:
             point = err.attrib.get("Point", "")
             code = err.attrib.get("Code", "")
             msg = err.attrib.get("Message", "Unknown Controller Error")
-            raise GB50ProtocolError(f"{msg} (Point='{point}', Code='{code}')", point=point, code=code, error_code=int(code) if code.isdigit() else None, raw_xml=raw_xml)
-        raise GB50ProtocolError("Controller returned getErrorResponse", raw_xml=raw_xml)
+            raise GB50ProtocolError(
+                f"{msg} (Point='{point}', Code='{code}')",
+                point=point,
+                code=code,
+                error_code=int(code) if code.isdigit() else None,
+                raw_xml=raw_xml,
+            )
+        raise GB50ProtocolError(f"Controller returned error command '{cmd_text}'", raw_xml=raw_xml)
 
 
 # --- Request Builders ---
@@ -175,7 +182,7 @@ def build_set_full_topology_request(
         if floor_mappings and gid in floor_mappings:
             flr = floor_mappings[gid]
             if flr > 0:
-                floor_records.append(f'        <FloorGroupRecord Group="{gid}" Floor="{flr}" />\r\n')
+                floor_records.append(f'        <FloorGroupRecord Group="{gid}" Floor="{flr}" FloorX="0" FloorY="0" />\r\n')
 
     floor_section = ""
     if floor_records:
@@ -233,7 +240,7 @@ def build_set_group_topology_request(
     if floor is not None and floor > 0:
         floor_xml = (
             f'      <FloorGroupList>\r\n'
-            f'        <FloorGroupRecord Group="{group_id}" Floor="{floor}" />\r\n'
+            f'        <FloorGroupRecord Group="{group_id}" Floor="{floor}" FloorX="0" FloorY="0" />\r\n'
             f'      </FloorGroupList>\r\n'
         )
 
@@ -259,7 +266,7 @@ def build_delete_group_request(group_id: int) -> str:
         f'        <MnetRecord Group="{group_id}" GroupNameWeb="" />\r\n'
         f'      </MnetList>\r\n'
         f'      <FloorGroupList>\r\n'
-        f'        <FloorGroupRecord Group="{group_id}" Floor="0" />\r\n'
+        f'        <FloorGroupRecord Group="{group_id}" Floor="0" FloorX="0" FloorY="0" />\r\n'
         f'      </FloorGroupList>\r\n'
         f'    </ControlGroup>\r\n'
     )
@@ -300,7 +307,7 @@ def build_set_floor_mapping_request(group_id: int, floor: int) -> str:
     body = (
         f'    <ControlGroup>\r\n'
         f'      <FloorGroupList>\r\n'
-        f'        <FloorGroupRecord Group="{group_id}" Floor="{floor}" />\r\n'
+        f'        <FloorGroupRecord Group="{group_id}" Floor="{floor}" FloorX="0" FloorY="0" />\r\n'
         f'      </FloorGroupList>\r\n'
         f'    </ControlGroup>\r\n'
     )
@@ -421,34 +428,121 @@ def build_get_weekly_schedule_request(group_id: int, season: int = 1) -> str:
     return wrap_packet("getRequest", body)
 
 
+def _validate_schedule_event(ev: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate event parameters against controller enums and temperature limits."""
+    hr = int(ev.get("hour", 0))
+    mn = int(ev.get("minute", 0))
+    if not (0 <= hr <= 23):
+        raise ValueError(f"Invalid event hour {hr}: must be between 0 and 23")
+    if not (0 <= mn <= 59):
+        raise ValueError(f"Invalid event minute {mn}: must be between 0 and 59")
+
+    drive_raw = ev.get("drive")
+    if drive_raw is None or drive_raw == "":
+        drive = "ON"
+    elif isinstance(drive_raw, DriveState):
+        drive = drive_raw.value
+    elif isinstance(drive_raw, str) and drive_raw in DriveState.__members__:
+        drive = DriveState[drive_raw].value
+    elif isinstance(drive_raw, str) and drive_raw in [e.value for e in DriveState]:
+        drive = drive_raw
+    elif isinstance(drive_raw, str) and drive_raw.upper() in DriveState.__members__:
+        drive = DriveState[drive_raw.upper()].value
+    else:
+        raise ValueError(f"Invalid drive state '{drive_raw}': must be one of {list(DriveState.__members__.keys())}")
+
+    mode_raw = ev.get("mode")
+    if mode_raw is None or mode_raw == "":
+        mode = "AUTO"
+    elif isinstance(mode_raw, OperationMode):
+        mode = mode_raw.value
+    elif isinstance(mode_raw, str) and mode_raw in OperationMode.__members__:
+        mode = OperationMode[mode_raw].value
+    elif isinstance(mode_raw, str) and mode_raw in [e.value for e in OperationMode]:
+        mode = mode_raw
+    elif isinstance(mode_raw, str) and mode_raw.upper() in OperationMode.__members__:
+        mode = OperationMode[mode_raw.upper()].value
+    else:
+        raise ValueError(f"Invalid operation mode '{mode_raw}': must be one of {list(OperationMode.__members__.keys())}")
+
+    set_temp = ev.get("set_temp_c")
+    if set_temp is not None:
+        try:
+            set_temp = float(set_temp)
+            if not (10.0 <= set_temp <= 35.0):
+                raise ValueError(f"Schedule temperature setpoint {set_temp:.1f}°C out of allowable range (10.0°C - 35.0°C)")
+        except (ValueError, TypeError) as ex:
+            raise ValueError(f"Invalid temperature setpoint '{set_temp}': {ex}")
+
+    fan_raw = ev.get("fan_speed")
+    if fan_raw is None or fan_raw == "":
+        fan = "AUTO"
+    elif isinstance(fan_raw, FanSpeed):
+        fan = fan_raw.value
+    elif isinstance(fan_raw, str) and fan_raw in FanSpeed.__members__:
+        fan = FanSpeed[fan_raw].value
+    elif isinstance(fan_raw, str) and fan_raw in [e.value for e in FanSpeed]:
+        fan = fan_raw
+    elif isinstance(fan_raw, str) and fan_raw.upper() in FanSpeed.__members__:
+        fan = FanSpeed[fan_raw.upper()].value
+    else:
+        raise ValueError(f"Invalid fan speed '{fan_raw}': must be one of {list(FanSpeed.__members__.keys())}")
+
+    air_raw = ev.get("air_direction")
+    if air_raw is None or air_raw == "":
+        air_dir = "AUTO"
+    elif isinstance(air_raw, AirDirection):
+        air_dir = air_raw.value
+    elif isinstance(air_raw, str) and air_raw in AirDirection.__members__:
+        air_dir = AirDirection[air_raw].value
+    elif isinstance(air_raw, str) and air_raw in [e.value for e in AirDirection]:
+        air_dir = air_raw
+    elif isinstance(air_raw, str) and air_raw.upper() in AirDirection.__members__:
+        air_dir = AirDirection[air_raw.upper()].value
+    else:
+        raise ValueError(f"Invalid air direction '{air_raw}': must be one of {list(AirDirection.__members__.keys())}")
+
+    return {
+        "hour": hr,
+        "minute": mn,
+        "drive": drive,
+        "mode": mode,
+        "set_temp_c": set_temp,
+        "fan_speed": fan,
+        "air_direction": air_dir,
+    }
+
+
 def build_set_today_schedule_request(group_ids: List[int], events: List[Dict[str, Any]]) -> str:
     """Build request to update today's schedule for one or more groups."""
     if len(events) > 16:
         raise ValueError(f"Maximum 16 timer events per day supported by GB-50 controller (got {len(events)})")
+
+    validated_events = [_validate_schedule_event(ev) for ev in events]
 
     lists = []
     for gid in group_ids:
         if not (1 <= gid <= 50):
             raise ValueError(f"Invalid group ID {gid}: must be between 1 and 50")
         rec_lines = []
-        for idx, ev in enumerate(events, 1):
-            hr = int(ev.get("hour", 0))
-            mn = int(ev.get("minute", 0))
-            if not (0 <= hr <= 23):
-                raise ValueError(f"Invalid event hour {hr}: must be between 0 and 23")
-            if not (0 <= mn <= 59):
-                raise ValueError(f"Invalid event minute {mn}: must be between 0 and 59")
-
-            drive = escape_xml_attr(ev.get("drive", "ON"))
-            mode = escape_xml_attr(ev.get("mode", "AUTO"))
-            set_temp = ev.get("set_temp_c")
-            st_attr = f'SetTemp="{set_temp:.1f}" ' if set_temp is not None else ''
-            fan = escape_xml_attr(ev.get("fan_speed", ""))
-            fan_attr = f'FanSpeed="{fan}" ' if fan else ''
-            air_dir = escape_xml_attr(ev.get("air_direction", ""))
-            air_attr = f'AirDirection="{air_dir}" ' if air_dir else ''
+        for idx, ev in enumerate(validated_events, 1):
+            hr = ev["hour"]
+            mn = ev["minute"]
+            drive = escape_xml_attr(ev["drive"])
+            mode = escape_xml_attr(ev["mode"])
+            set_temp = ev["set_temp_c"]
+            fan = escape_xml_attr(ev["fan_speed"]) or "AUTO"
+            air_dir = escape_xml_attr(ev["air_direction"]) or "AUTO"
+            drive_item = "CHK_ON" if drive else "CHK_OFF"
+            mode_item = "CHK_ON" if mode else "CHK_OFF"
+            if set_temp is not None:
+                st_val = f"{set_temp:.1f}"
+                set_temp_item = "CHK_ON"
+            else:
+                st_val = "0"
+                set_temp_item = "CHK_OFF"
             rec_lines.append(
-                f'        <TodayRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" {st_attr}{fan_attr}{air_attr}/>\r\n'
+                f'        <TodayRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" SetTemp="{st_val}" AirDirection="{air_dir}" FanSpeed="{fan}" DriveItem="{drive_item}" ModeItem="{mode_item}" SetTempItem="{set_temp_item}" />\r\n'
             )
         lists.append(
             f'      <TodayList Group="{gid}">\r\n{"".join(rec_lines)}      </TodayList>\r\n'
@@ -464,29 +558,31 @@ def build_set_weekly_schedule_request(group_ids: List[int], day_of_week: int, ev
     if len(events) > 16:
         raise ValueError(f"Maximum 16 timer events per day supported by GB-50 controller (got {len(events)})")
 
+    validated_events = [_validate_schedule_event(ev) for ev in events]
+
     lists = []
     for gid in group_ids:
         if not (1 <= gid <= 50):
             raise ValueError(f"Invalid group ID {gid}: must be between 1 and 50")
         rec_lines = []
-        for idx, ev in enumerate(events, 1):
-            hr = int(ev.get("hour", 0))
-            mn = int(ev.get("minute", 0))
-            if not (0 <= hr <= 23):
-                raise ValueError(f"Invalid event hour {hr}: must be between 0 and 23")
-            if not (0 <= mn <= 59):
-                raise ValueError(f"Invalid event minute {mn}: must be between 0 and 59")
-
-            drive = escape_xml_attr(ev.get("drive", "ON"))
-            mode = escape_xml_attr(ev.get("mode", "AUTO"))
-            set_temp = ev.get("set_temp_c")
-            st_attr = f'SetTemp="{set_temp:.1f}" ' if set_temp is not None else ''
-            fan = escape_xml_attr(ev.get("fan_speed", ""))
-            fan_attr = f'FanSpeed="{fan}" ' if fan else ''
-            air_dir = escape_xml_attr(ev.get("air_direction", ""))
-            air_attr = f'AirDirection="{air_dir}" ' if air_dir else ''
+        for idx, ev in enumerate(validated_events, 1):
+            hr = ev["hour"]
+            mn = ev["minute"]
+            drive = escape_xml_attr(ev["drive"])
+            mode = escape_xml_attr(ev["mode"])
+            set_temp = ev["set_temp_c"]
+            fan = escape_xml_attr(ev["fan_speed"]) or "AUTO"
+            air_dir = escape_xml_attr(ev["air_direction"]) or "AUTO"
+            drive_item = "CHK_ON" if drive else "CHK_OFF"
+            mode_item = "CHK_ON" if mode else "CHK_OFF"
+            if set_temp is not None:
+                st_val = f"{set_temp:.1f}"
+                set_temp_item = "CHK_ON"
+            else:
+                st_val = "0"
+                set_temp_item = "CHK_OFF"
             rec_lines.append(
-                f'        <WPatternRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" {st_attr}{fan_attr}{air_attr}/>\r\n'
+                f'        <WPatternRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" SetTemp="{st_val}" AirDirection="{air_dir}" FanSpeed="{fan}" DriveItem="{drive_item}" ModeItem="{mode_item}" SetTempItem="{set_temp_item}" />\r\n'
             )
         lists.append(
             f'      <WPatternList Group="{gid}" Season="{season}" Pattern="{day_of_week}">\r\n{"".join(rec_lines)}      </WPatternList>\r\n'

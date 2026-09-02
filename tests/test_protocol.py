@@ -1,6 +1,7 @@
 """Unit tests for XML protocol building and parsing."""
 
 import pytest
+import xml.etree.ElementTree as ET
 from gb50.protocol import (
     build_get_system_info_request,
     build_get_topology_request,
@@ -16,6 +17,7 @@ from gb50.protocol import (
     parse_today_schedule,
     parse_summertime,
     parse_setback,
+    check_error_response,
     GB50ProtocolError,
 )
 from gb50.models import GroupControlRequest
@@ -117,7 +119,8 @@ def test_parse_setback():
 
 
 def test_parse_error_response():
-    xml = """<?xml version="1.0" encoding="UTF-8"?>
+    # 1. getErrorResponse with ERROR element
+    xml_get_err = """<?xml version="1.0" encoding="UTF-8"?>
 <Packet>
   <Command>getErrorResponse</Command>
   <DatabaseManager>
@@ -125,9 +128,64 @@ def test_parse_error_response():
   </DatabaseManager>
 </Packet>"""
     with pytest.raises(GB50ProtocolError) as exc_info:
-        parse_system_info(xml)
+        parse_system_info(xml_get_err)
     assert exc_info.value.point == "SetTemp"
     assert exc_info.value.code == "0101"
+    assert exc_info.value.error_code == 101
+
+    # 2. setErrorResponse with ERROR element
+    xml_set_err = """<?xml version="1.0" encoding="UTF-8"?>
+<Packet>
+  <Command>setErrorResponse</Command>
+  <DatabaseManager>
+    <ERROR Point="Drive" Code="0102" Message="Invalid State" />
+  </DatabaseManager>
+</Packet>"""
+    root_set_err = ET.fromstring(xml_set_err)
+    with pytest.raises(GB50ProtocolError) as exc_info2:
+        check_error_response(root_set_err, raw_xml=xml_set_err)
+    assert exc_info2.value.point == "Drive"
+    assert exc_info2.value.code == "0102"
+    assert exc_info2.value.error_code == 102
+    assert "Invalid State" in str(exc_info2.value)
+
+    # 3. setErrorResponse without ERROR element
+    xml_set_err_no_elem = """<?xml version="1.0" encoding="UTF-8"?>
+<Packet>
+  <Command>setErrorResponse</Command>
+  <DatabaseManager />
+</Packet>"""
+    root_set_err_no_elem = ET.fromstring(xml_set_err_no_elem)
+    with pytest.raises(GB50ProtocolError) as exc_info3:
+        check_error_response(root_set_err_no_elem, raw_xml=xml_set_err_no_elem)
+    assert "setErrorResponse" in str(exc_info3.value)
+
+    # 4. Generic ErrorResponse command
+    xml_generic_err = """<?xml version="1.0" encoding="UTF-8"?>
+<Packet>
+  <Command>ErrorResponse</Command>
+  <DatabaseManager />
+</Packet>"""
+    root_generic_err = ET.fromstring(xml_generic_err)
+    with pytest.raises(GB50ProtocolError) as exc_info4:
+        check_error_response(root_generic_err, raw_xml=xml_generic_err)
+    assert "ErrorResponse" in str(exc_info4.value)
+
+    # 5. Normal command but with embedded ERROR element
+    xml_embedded_err = """<?xml version="1.0" encoding="UTF-8"?>
+<Packet>
+  <Command>getResponse</Command>
+  <DatabaseManager>
+    <ERROR Point="Mnet" Code="9999" Message="Communication Loss" />
+  </DatabaseManager>
+</Packet>"""
+    root_embedded_err = ET.fromstring(xml_embedded_err)
+    with pytest.raises(GB50ProtocolError) as exc_info5:
+        check_error_response(root_embedded_err, raw_xml=xml_embedded_err)
+    assert exc_info5.value.point == "Mnet"
+    assert exc_info5.value.code == "9999"
+    assert exc_info5.value.error_code == 9999
+
 
 
 def test_group_crud_and_floor_protocol():
@@ -152,14 +210,14 @@ def test_group_crud_and_floor_protocol():
     assert 'Group="31" Model="IC" Address="31"' in req_set
     assert 'Group="31" Model="IC" Address="32"' in req_set
     assert 'Group="31" Model="RC" Address="131"' in req_set
-    assert 'FloorGroupRecord Group="31" Floor="2"' in req_set
+    assert 'FloorGroupRecord Group="31" Floor="2" FloorX="0" FloorY="0"' in req_set
 
     req_del = build_delete_group_request(31)
     assert 'GroupNameWeb=""' in req_del
-    assert 'FloorGroupRecord Group="31" Floor="0"' in req_del
+    assert 'FloorGroupRecord Group="31" Floor="0" FloorX="0" FloorY="0"' in req_del
 
     req_flr = build_set_floor_mapping_request(15, 1)
-    assert 'FloorGroupRecord Group="15" Floor="1"' in req_flr
+    assert 'FloorGroupRecord Group="15" Floor="1" FloorX="0" FloorY="0"' in req_flr
 
     xml_floor = """<?xml version="1.0" encoding="UTF-8"?>
 <Packet>
@@ -195,5 +253,22 @@ def test_group_crud_and_floor_protocol():
     assert 'Group="1" GroupNameWeb="FC1-1"' in req_full_top
     assert 'Group="2" GroupNameWeb="RM107"' in req_full_top
     assert 'Group="2" Model="IC" Address="3"' in req_full_top
-    assert 'FloorGroupRecord Group="2" Floor="1"' in req_full_top
+    assert 'FloorGroupRecord Group="2" Floor="1" FloorX="0" FloorY="0"' in req_full_top
+
+    # Test schedule request builders generate DriveItem, ModeItem, SetTempItem
+    from gb50.protocol import build_set_weekly_schedule_request, build_set_today_schedule_request
+    events = [
+        {"hour": 8, "minute": 30, "drive": "ON", "mode": "COOL", "set_temp_c": 22.0, "fan_speed": "AUTO"},
+        {"hour": 17, "minute": 0, "drive": "OFF"},
+    ]
+    req_weekly = build_set_weekly_schedule_request([1, 2], 1, events)
+    assert '<WPatternList Group="1" Season="1" Pattern="1">' in req_weekly
+    assert '<WPatternList Group="2" Season="1" Pattern="1">' in req_weekly
+    assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON"' in req_weekly
+    assert 'Drive="OFF" Mode="AUTO" SetTemp="0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_OFF"' in req_weekly
+
+    req_today = build_set_today_schedule_request([1], events)
+    assert '<TodayList Group="1">' in req_today
+    assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON"' in req_today
+
 

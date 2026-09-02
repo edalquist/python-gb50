@@ -72,3 +72,18 @@ def test_unknown_mode_code_raises():
     assert exc_info.value.byte_index == 2
     assert "Unknown bulk operation mode code" in str(exc_info.value)
 
+
+def test_invalid_bulk_length_too_long():
+    from gb50.exceptions import GB50ParseError
+    hex_data = "01" * 66  # 132 chars
+    with pytest.raises(GB50ParseError, match="expected exactly 130 hex chars"):
+        parse_bulk_telemetry(hex_data)
+
+
+def test_invalid_bulk_non_hex_characters():
+    from gb50.exceptions import GB50ParseError
+    hex_data = "01" * 64 + "ZZ"  # 130 chars with invalid hex 'ZZ'
+    with pytest.raises(GB50ParseError, match="Invalid hexadecimal encoding"):
+        parse_bulk_telemetry(hex_data)
+
+

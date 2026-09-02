@@ -24,6 +24,7 @@ class StateManager:
         self._groups_cache: Dict[int, GroupStatus] = {}
         self._listeners: Set[Callable[[GroupStatus], Any]] = set()
         self._raw_subscribers: Set[Any] = set()
+        self._ws_user_map: Dict[Any, int] = {}
         self._active_listener_tasks: Set[asyncio.Task] = set()
         self._poll_task: Optional[asyncio.Task] = None
         self._running = False
@@ -81,6 +82,11 @@ class StateManager:
             self._system_info = await self.client.get_system_info()
         return self._system_info
 
+    async def refresh_system_info(self) -> SystemInfo:
+        """Force refresh controller system info from hardware and update cache."""
+        self._system_info = await self.client.get_system_info()
+        return self._system_info
+
     async def get_all_groups(self, refresh: bool = False) -> List[GroupStatus]:
         """Fetch or return cached group status list."""
         if refresh or not self._groups_cache:
@@ -115,13 +121,26 @@ class StateManager:
         """Unregister a raw WebSocket client."""
         self._raw_subscribers.discard(ws)
 
-    def register_ws(self, ws: Any) -> None:
-        """Register a WebSocket connection."""
+    def register_ws(self, ws: Any, user_id: Optional[int] = None) -> None:
+        """Register a WebSocket connection with optional user identification."""
         self._raw_subscribers.add(ws)
+        if user_id is not None:
+            self._ws_user_map[ws] = user_id
 
     def unregister_ws(self, ws: Any) -> None:
         """Unregister a WebSocket connection."""
         self._raw_subscribers.discard(ws)
+        self._ws_user_map.pop(ws, None)
+
+    async def disconnect_user(self, user_id: int) -> None:
+        """Close and unregister all active WebSocket connections for a user."""
+        matching = [ws for ws, uid in list(self._ws_user_map.items()) if uid == user_id]
+        for ws in matching:
+            try:
+                await ws.close(code=1008)
+            except Exception:
+                pass
+            self.unregister_ws(ws)
 
     async def get_schedule(self, group_id: int) -> List[ScheduleItem]:
         """Fetch today's scheduled events for a group."""
@@ -287,7 +306,9 @@ class StateManager:
             a.fan_speed != b.fan_speed or
             a.air_direction != b.air_direction or
             a.filter_dirty != b.filter_dirty or
-            a.error_active != b.error_active
+            a.error_active != b.error_active or
+            a.schedule_enabled != b.schedule_enabled or
+            a.remote_lock != b.remote_lock
         )
 
     async def _broadcast_status(self, connected: bool, error: Optional[str] = None) -> None:

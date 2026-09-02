@@ -109,6 +109,7 @@ class GB50Client:
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self._topology_cache: Optional[Dict[int, Dict[str, Any]]] = None
         self._topology_lock = asyncio.Lock()
+        self._topology_mutation_lock = asyncio.Lock()
         self._http_lock = asyncio.Lock()
         self._lock = self._topology_lock
 
@@ -146,12 +147,30 @@ class GB50Client:
                         body = await resp.text(encoding="utf-8", errors="replace")
                         logger.debug("Received XML (HTTP %s) from %s:\n%s", resp.status, self.url, _redact_xml(body))
                         
-                        if resp.status not in (200, 500):
+                        if resp.status == 500:
+                            # Verify if body contains a valid GB-50 XML response
+                            is_gb50_packet = False
+                            if body.strip().startswith("<"):
+                                try:
+                                    test_root = ET.fromstring(body)
+                                    if test_root.tag == "Packet":
+                                        is_gb50_packet = True
+                                except Exception:
+                                    is_gb50_packet = False
+                            if not is_gb50_packet:
+                                preview = body[:200].replace("\r", " ").replace("\n", " ").strip()
+                                raise GB50TransportError(
+                                    f"HTTP 500 from controller: {preview}",
+                                    status_code=resp.status,
+                                    response_body=body,
+                                )
+                            return body
+                        elif resp.status != 200:
                             logger.error("Unexpected HTTP status %s from controller %s. Response body:\n%s", resp.status, self.url, _redact_xml(body))
                             resp.raise_for_status()
-                        if resp.status == 500 and not body.strip().startswith("<"):
-                            raise GB50TransportError(f"HTTP 500 from controller: {body[:200]}", status_code=resp.status, response_body=body)
                         return body
+                except GB50TransportError:
+                    raise
                 except (aiohttp.ClientError, OSError, asyncio.TimeoutError) as ex:
                     if attempt < max_retries:
                         backoff = 0.2 * (attempt + 1)
@@ -159,14 +178,16 @@ class GB50Client:
                             "Transient transport error communicating with GB-50 at %s: %s. Retrying in %.2fs (attempt %d/%d)...",
                             self.url, ex, backoff, attempt + 1, max_retries
                         )
-                        if self._owns_session and self._session is not None and not self._session.closed:
-                            await self._session.close()
-                        self._session = aiohttp.ClientSession(timeout=self.timeout)
-                        self._owns_session = True
+                        if self._owns_session:
+                            if self._session is not None and not self._session.closed:
+                                await self._session.close()
+                            self._session = aiohttp.ClientSession(timeout=self.timeout)
                         await asyncio.sleep(backoff)
                     else:
                         logger.error("HTTP error communicating with GB-50 at %s: %s\nRequest payload was:\n%s", self.url, ex, _redact_xml(xml_payload))
-                        raise
+                        raise GB50TransportError(
+                            f"Failed to communicate with GB-50 at {self.url} after {max_retries} retries: {ex}"
+                        ) from ex
 
     async def get_system_info(self) -> SystemInfo:
         """Fetch controller hardware metadata, firmware version, and licensed functions."""
@@ -215,50 +236,62 @@ class GB50Client:
         floor: Optional[int] = None,
     ) -> bool:
         """Configure group name, primary unit address, slave units, remote controllers, and floor, preserving all other groups."""
-        top = await self.get_topology()
-        # Merge updated group into full topology map (top is already a deep copy)
-        top[group_id] = {
-            "name": name,
-            "address": primary_ic,
-            "model": model,
-            "slaves": slave_ics or [],
-            "rcs": rcs or [],
-        }
-        floor_map = {}
-        try:
-            floor_map = await self.get_floor_mappings()
-        except Exception:
-            pass
-        if floor is not None and floor > 0:
-            floor_map[group_id] = floor
+        async with self._topology_mutation_lock:
+            top = await self.get_topology(force_refresh=True)
+            # Merge updated group into full topology map (top is already a deep copy)
+            top[group_id] = {
+                "name": name,
+                "address": primary_ic,
+                "model": model,
+                "slaves": slave_ics or [],
+                "rcs": rcs or [],
+            }
+            floor_map = {}
+            try:
+                floor_map = await self.get_floor_mappings()
+            except Exception:
+                pass
+            if floor is not None and floor > 0:
+                floor_map[group_id] = floor
 
-        xml_req = build_set_full_topology_request(top, floor_mappings=floor_map)
-        xml_resp = await self._send_xml(xml_req)
-        root = ET.fromstring(xml_resp)
-        check_error_response(root, raw_xml=xml_resp)
-        self._topology_cache = None
-        return True
+            xml_req = build_set_full_topology_request(top, floor_mappings=floor_map)
+            xml_resp = await self._send_xml(xml_req)
+            root = ET.fromstring(xml_resp)
+            check_error_response(root, raw_xml=xml_resp)
+            self._topology_cache = None
+            
+            # Read-back verification
+            verified = await self.get_topology(force_refresh=True)
+            if group_id not in verified or verified[group_id].get("address") != primary_ic:
+                raise GB50ProtocolError(f"Topology mutation verification failed for group {group_id}")
+            return True
 
     async def delete_group(self, group_id: int) -> bool:
         """Delete an HVAC group and unassign its devices and floor from controller memory, preserving all other groups."""
-        top = await self.get_topology()
-        if group_id in top:
-            del top[group_id]
+        async with self._topology_mutation_lock:
+            top = await self.get_topology(force_refresh=True)
+            if group_id in top:
+                del top[group_id]
 
-        floor_map = {}
-        try:
-            floor_map = await self.get_floor_mappings()
-            if group_id in floor_map:
-                del floor_map[group_id]
-        except Exception:
-            pass
+            floor_map = {}
+            try:
+                floor_map = await self.get_floor_mappings()
+                if group_id in floor_map:
+                    del floor_map[group_id]
+            except Exception:
+                pass
 
-        xml_req = build_set_full_topology_request(top, floor_mappings=floor_map)
-        xml_resp = await self._send_xml(xml_req)
-        root = ET.fromstring(xml_resp)
-        check_error_response(root, raw_xml=xml_resp)
-        self._topology_cache = None
-        return True
+            xml_req = build_set_full_topology_request(top, floor_mappings=floor_map)
+            xml_resp = await self._send_xml(xml_req)
+            root = ET.fromstring(xml_resp)
+            check_error_response(root, raw_xml=xml_resp)
+            self._topology_cache = None
+
+            # Read-back verification
+            verified = await self.get_topology(force_refresh=True)
+            if group_id in verified:
+                raise GB50ProtocolError(f"Delete group verification failed: group {group_id} still present in topology")
+            return True
 
     async def get_floor_mappings(self) -> Dict[int, int]:
         """Fetch floor assignments for all groups {group_id: floor_number}."""
@@ -272,6 +305,7 @@ class GB50Client:
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
         check_error_response(root, raw_xml=xml_resp)
+        self._topology_cache = None
         return True
 
     async def get_all_groups(self, refresh_topology: bool = False) -> List[GroupStatus]:
@@ -344,16 +378,22 @@ class GB50Client:
 
     async def set_group_name(self, group_id: int, name: str) -> bool:
         """Rename an HVAC group web display name, preserving all other group names."""
-        top = await self.get_topology()
-        all_names = {gid: info.get("name", f"Group {gid}") for gid, info in top.items()}
-        all_names[group_id] = name
+        async with self._topology_mutation_lock:
+            top = await self.get_topology(force_refresh=True)
+            all_names = {gid: info.get("name", f"Group {gid}") for gid, info in top.items()}
+            all_names[group_id] = name
 
-        xml_req = build_set_all_group_names_request(all_names)
-        xml_resp = await self._send_xml(xml_req)
-        root = ET.fromstring(xml_resp)
-        check_error_response(root, raw_xml=xml_resp)
-        self._topology_cache = None
-        return True
+            xml_req = build_set_all_group_names_request(all_names)
+            xml_resp = await self._send_xml(xml_req)
+            root = ET.fromstring(xml_resp)
+            check_error_response(root, raw_xml=xml_resp)
+            self._topology_cache = None
+            
+            # Read-back verification
+            verified = await self.get_topology(force_refresh=True)
+            if verified.get(group_id, {}).get("name") != name:
+                raise GB50ProtocolError(f"Rename verification failed for group {group_id}: expected '{name}'")
+            return True
 
     async def set_groups_batch(self, updates: Dict[int, GroupControlRequest]) -> bool:
         """Send batch command to control multiple HVAC groups in a single HTTP request."""
@@ -554,8 +594,35 @@ class GB50Client:
             return ua.attrib["AuthKey"]
         raise GB50ProtocolError("Missing AuthKey in controller response", raw_xml=xml_resp)
 
-    async def get_users(self, category: str = "Administrator", include_passwords: bool = False) -> List[Dict[str, Any]]:
-        """Retrieve user accounts for a given category (Administrator, Maintenance, PublicUser)."""
+    async def get_users(self, category: str = "Administrator") -> List[Dict[str, Any]]:
+        """Retrieve user accounts metadata for a given category (Administrator, Maintenance, PublicUser)."""
+        auth_key = await self.get_auth_key()
+        auth_id = encrypt("UserList", auth_key)
+        body = (
+            f'    <UserAuth>\r\n'
+            f'      <UserList AuthID="{auth_id}" UserCategory="{category}">\r\n'
+            f'        <UserRecord />\r\n'
+            f'      </UserList>\r\n'
+            f'    </UserAuth>\r\n'
+        )
+        xml_req = wrap_packet("getRequest", body)
+        xml_resp = await self._send_xml(xml_req)
+        root = ET.fromstring(xml_resp)
+        check_error_response(root, raw_xml=xml_resp)
+        
+        users: List[Dict[str, Any]] = []
+        for rec in root.iter("UserRecord"):
+            u = rec.attrib.get("User", "")
+            ag = rec.attrib.get("AvailableGroup", "FFFFFFFFFFFFFFFF")
+            users.append({
+                "user": u,
+                "category": category,
+                "available_group": ag,
+            })
+        return users
+
+    async def get_user_decrypted_passwords(self, category: str = "Administrator") -> List[Dict[str, Any]]:
+        """Retrieve user accounts with decrypted passwords for administrative recovery purposes."""
         auth_key = await self.get_auth_key()
         auth_id = encrypt("UserList", auth_key)
         body = (
@@ -576,15 +643,13 @@ class GB50Client:
             p_enc = rec.attrib.get("Password", "")
             pk_str = rec.attrib.get("PasswordKey", "")
             ag = rec.attrib.get("AvailableGroup", "FFFFFFFFFFFFFFFF")
-            user_data: Dict[str, Any] = {
+            dec_pw = decrypt(p_enc, int(pk_str)) if p_enc and pk_str and pk_str.isdigit() else ""
+            users.append({
                 "user": u,
                 "category": category,
                 "available_group": ag,
-            }
-            if include_passwords:
-                dec_pw = decrypt(p_enc, int(pk_str)) if p_enc and pk_str and pk_str.isdigit() else ""
-                user_data["password"] = dec_pw
-            users.append(user_data)
+                "password": dec_pw,
+            })
         return users
 
     async def set_user_password(self, user: str, new_password: str) -> bool:
