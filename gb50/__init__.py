@@ -16,6 +16,7 @@ from .models import (
     SystemInfo,
     ScheduleItem,
     AlarmRecord,
+    SeasonRecord,
     c_to_f,
     f_to_c,
 )
@@ -50,6 +51,8 @@ __all__ = [
     "SystemInfo",
     "ScheduleItem",
     "AlarmRecord",
+    "SeasonRecord",
     "c_to_f",
     "f_to_c",
 ]
+

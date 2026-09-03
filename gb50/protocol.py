@@ -23,6 +23,7 @@ from .models import (
     ScheduleItem,
     AlarmRecord,
     GroupControlRequest,
+    SeasonRecord,
 )
 from .bulk_parser import parse_bulk_telemetry
 
@@ -591,6 +592,37 @@ def build_set_weekly_schedule_request(group_ids: List[int], day_of_week: int, ev
     return wrap_packet("setRequest", body)
 
 
+def build_get_season_list_request() -> str:
+    """Build request to query the 5 global seasonal calendar date spans."""
+    body = '    <ScheduleControl>\r\n      <WSeasonList><WSeasonRecord /></WSeasonList>\r\n    </ScheduleControl>\r\n'
+    return wrap_packet("getRequest", body)
+
+
+def build_set_season_list_request(seasons: List[Dict[str, int]]) -> str:
+    """Build request to configure seasonal calendar date spans across all 5 seasons on GB-50 controller."""
+    season_map: Dict[int, Dict[str, int]] = {
+        i: {"season": i, "start_month": 0, "start_day": 0, "end_month": 0, "end_day": 0} for i in range(1, 6)
+    }
+    for s in seasons:
+        sid = int(s.get("season", 0))
+        if 1 <= sid <= 5:
+            season_map[sid] = {
+                "season": sid,
+                "start_month": int(s.get("start_month", 0)),
+                "start_day": int(s.get("start_day", 0)),
+                "end_month": int(s.get("end_month", 0)),
+                "end_day": int(s.get("end_day", 0)),
+            }
+    lines = []
+    for sid in range(1, 6):
+        rec = season_map[sid]
+        lines.append(
+            f'        <WSeasonRecord Season="{rec["season"]}" StartMonth="{rec["start_month"]}" StartDay="{rec["start_day"]}" EndMonth="{rec["end_month"]}" EndDay="{rec["end_day"]}" />\r\n'
+        )
+    body = f'    <ScheduleControl>\r\n      <WSeasonList>\r\n{"".join(lines)}      </WSeasonList>\r\n    </ScheduleControl>\r\n'
+    return wrap_packet("setRequest", body)
+
+
 def build_get_alarms_request(priority_level: int = 2) -> str:
     """Build request to retrieve active unit alarms or historical log."""
     body = (
@@ -1066,6 +1098,32 @@ def parse_weekly_schedule(xml_str: str) -> Dict[int, List[ScheduleItem]]:
             )
         patterns[pat] = sorted(items, key=lambda x: (x.hour, x.minute))
     return patterns
+
+
+def parse_season_list(xml_str: str) -> List[SeasonRecord]:
+    """Parse WSeasonList response into list of SeasonRecord objects (Seasons 1..5)."""
+    root = ET.fromstring(xml_str)
+    check_error_response(root, raw_xml=xml_str)
+    seasons: List[SeasonRecord] = []
+    for rec in root.iter("WSeasonRecord"):
+        s_str = rec.attrib.get("Season")
+        if not s_str or not s_str.isdigit():
+            continue
+        sid = int(s_str)
+        sm = int(rec.attrib.get("StartMonth", 0))
+        sd = int(rec.attrib.get("StartDay", 0))
+        em = int(rec.attrib.get("EndMonth", 0))
+        ed = int(rec.attrib.get("EndDay", 0))
+        seasons.append(
+            SeasonRecord(
+                season=sid,
+                start_month=sm,
+                start_day=sd,
+                end_month=em,
+                end_day=ed,
+            )
+        )
+    return sorted(seasons, key=lambda s: s.season)
 
 
 MITSUBISHI_ERROR_INFO: Dict[str, Dict[str, str]] = {

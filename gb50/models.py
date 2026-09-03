@@ -199,3 +199,26 @@ class AlarmRecord(BaseModel):
     description: str = Field("", description="Plain-English explanation of the error")
     troubleshooting: str = Field("", description="Recommended field troubleshooting steps")
     message: str = Field("", description="Summary message string")
+
+
+class SeasonRecord(BaseModel):
+    """Global seasonal calendar date range on the GB-50 controller."""
+    season: int = Field(..., description="Season index (1..5)", ge=1, le=5)
+    start_month: int = Field(0, description="Start month (1..12 or 0 for unassigned)", ge=0, le=12)
+    start_day: int = Field(0, description="Start day (1..31 or 0 for unassigned)", ge=0, le=31)
+    end_month: int = Field(0, description="End month (1..12 or 0 for unassigned)", ge=0, le=12)
+    end_day: int = Field(0, description="End day (1..31 or 0 for unassigned)", ge=0, le=31)
+
+    @property
+    def is_configured(self) -> bool:
+        return self.start_month > 0 and self.start_day > 0 and self.end_month > 0 and self.end_day > 0
+
+    def is_active_on(self, month: int, day: int) -> bool:
+        """Evaluate if the given month/day falls within this season's calendar window."""
+        if not self.is_configured:
+            return False
+        if self.start_month < self.end_month or (self.start_month == self.end_month and self.start_day <= self.end_day):
+            return (self.start_month, self.start_day) <= (month, day) <= (self.end_month, self.end_day)
+        else:
+            return (month, day) >= (self.start_month, self.start_day) or (month, day) <= (self.end_month, self.end_day)
+

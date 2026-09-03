@@ -24,6 +24,7 @@ from .models import (
     ScheduleItem,
     AlarmRecord,
     GroupControlRequest,
+    SeasonRecord,
 )
 from .exceptions import (
     GB50Error,
@@ -52,6 +53,9 @@ from .protocol import (
     build_get_weekly_schedule_request,
     build_set_today_schedule_request,
     build_set_weekly_schedule_request,
+    build_get_season_list_request,
+    build_set_season_list_request,
+    parse_season_list,
     build_get_alarms_request,
     build_delete_alarm_history_request,
     build_get_datetime_request,
@@ -472,6 +476,20 @@ class GB50Client:
         if not group_ids:
             return True
         xml_req = build_set_weekly_schedule_request(group_ids, day_of_week, events, season=season)
+        xml_resp = await self._send_xml(xml_req)
+        root = ET.fromstring(xml_resp)
+        check_error_response(root, raw_xml=xml_resp)
+        return True
+
+    async def get_seasons(self) -> List[SeasonRecord]:
+        """Retrieve the 5 global seasonal calendar date spans from GB-50 controller."""
+        xml_req = build_get_season_list_request()
+        xml_resp = await self._send_xml(xml_req)
+        return parse_season_list(xml_resp)
+
+    async def set_seasons(self, seasons: List[Dict[str, int]]) -> bool:
+        """Configure the 5 global seasonal calendar date spans on GB-50 controller."""
+        xml_req = build_set_season_list_request(seasons)
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
         check_error_response(root, raw_xml=xml_resp)

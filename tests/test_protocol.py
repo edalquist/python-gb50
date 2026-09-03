@@ -272,3 +272,62 @@ def test_group_crud_and_floor_protocol():
     assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON"' in req_today
 
 
+def test_seasonal_schedule_protocol():
+    """Verify season date spans request builders, parsers, and active date calculation."""
+    from gb50.protocol import build_get_season_list_request, build_set_season_list_request, parse_season_list
+    from gb50.models import SeasonRecord
+
+    # 1. Test build_get_season_list_request
+    req_get = build_get_season_list_request()
+    assert '<Command>getRequest</Command>' in req_get
+    assert '<WSeasonList><WSeasonRecord /></WSeasonList>' in req_get
+
+    # 2. Test build_set_season_list_request
+    seasons_data = [
+        {"season": 1, "start_month": 4, "start_day": 1, "end_month": 9, "end_day": 30},
+        {"season": 2, "start_month": 10, "start_day": 1, "end_month": 3, "end_day": 31},
+    ]
+    req_set = build_set_season_list_request(seasons_data)
+    assert '<Command>setRequest</Command>' in req_set
+    assert '<WSeasonRecord Season="1" StartMonth="4" StartDay="1" EndMonth="9" EndDay="30" />' in req_set
+    assert '<WSeasonRecord Season="2" StartMonth="10" StartDay="1" EndMonth="3" EndDay="31" />' in req_set
+    assert '<WSeasonRecord Season="3" StartMonth="0" StartDay="0" EndMonth="0" EndDay="0" />' in req_set
+    assert '<WSeasonRecord Season="4" StartMonth="0" StartDay="0" EndMonth="0" EndDay="0" />' in req_set
+    assert '<WSeasonRecord Season="5" StartMonth="0" StartDay="0" EndMonth="0" EndDay="0" />' in req_set
+
+    # 3. Test parse_season_list
+    mock_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<Packet>
+  <Command>getResponse</Command>
+  <DatabaseManager>
+    <ScheduleControl>
+      <WSeasonList>
+        <WSeasonRecord Season="1" StartMonth="4" StartDay="1" EndMonth="9" EndDay="30" />
+        <WSeasonRecord Season="2" StartMonth="10" StartDay="1" EndMonth="3" EndDay="31" />
+        <WSeasonRecord Season="3" StartMonth="0" StartDay="0" EndMonth="0" EndDay="0" />
+        <WSeasonRecord Season="4" StartMonth="0" StartDay="0" EndMonth="0" EndDay="0" />
+        <WSeasonRecord Season="5" StartMonth="0" StartDay="0" EndMonth="0" EndDay="0" />
+      </WSeasonList>
+    </ScheduleControl>
+  </DatabaseManager>
+</Packet>"""
+    parsed = parse_season_list(mock_xml)
+    assert len(parsed) == 5
+    assert parsed[0].season == 1
+    assert parsed[0].start_month == 4
+    assert parsed[0].end_month == 9
+    assert parsed[0].is_active_on(7, 15) is True
+    assert parsed[0].is_active_on(1, 15) is False
+
+    # Season 2 wraps around year-end: Oct 1 to Mar 31
+    assert parsed[1].season == 2
+    assert parsed[1].is_active_on(12, 25) is True
+    assert parsed[1].is_active_on(1, 15) is True
+    assert parsed[1].is_active_on(7, 15) is False
+
+    # Season 3 unconfigured
+    assert parsed[2].is_configured is False
+    assert parsed[2].is_active_on(7, 15) is False
+
+
+
