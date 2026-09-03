@@ -467,9 +467,15 @@ def _validate_schedule_event(ev: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError(f"Invalid operation mode '{mode_raw}': must be one of {list(OperationMode.__members__.keys())}")
 
     set_temp = ev.get("set_temp_c")
+    if set_temp is None and ev.get("set_temp_f") is not None:
+        try:
+            set_temp = round(((float(ev["set_temp_f"]) - 32.0) * 5.0 / 9.0) * 2.0) / 2.0
+        except (ValueError, TypeError) as ex:
+            raise ValueError(f"Invalid temperature setpoint '{ev.get('set_temp_f')}': {ex}")
+
     if set_temp is not None:
         try:
-            set_temp = float(set_temp)
+            set_temp = round(float(set_temp) * 2.0) / 2.0
             if not (10.0 <= set_temp <= 35.0):
                 raise ValueError(f"Schedule temperature setpoint {set_temp:.1f}°C out of allowable range (10.0°C - 35.0°C)")
         except (ValueError, TypeError) as ex:

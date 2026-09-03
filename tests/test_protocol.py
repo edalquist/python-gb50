@@ -51,7 +51,7 @@ def test_build_requests():
     assert 'Group="1"' in req_set
     assert 'Drive="ON"' in req_set
     assert 'Mode="HEAT"' in req_set
-    assert 'SetTemp="21.1"' in req_set
+    assert 'SetTemp="21.0"' in req_set
     assert 'FanSpeed="HIGH"' in req_set
 
     req_filter = build_reset_filter_request(1)
