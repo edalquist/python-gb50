@@ -169,6 +169,7 @@ class ScheduleItem(BaseModel):
     set_temp_c: Optional[float] = None
     air_direction: Optional[AirDirection] = None
     fan_speed: Optional[FanSpeed] = None
+    remote_lock: Optional[RemoteControlPermission] = Field(RemoteControlPermission.PERMIT, description="Local wall controller lock permission")
 
     @computed_field
     @property

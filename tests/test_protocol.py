@@ -271,6 +271,32 @@ def test_group_crud_and_floor_protocol():
     assert '<TodayList Group="1">' in req_today
     assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_OFF" ModeItem="CHK_OFF" SetTempItem="CHK_OFF"' in req_today
 
+    # Test PROHIBIT schedule event
+    events_locked = [
+        {"hour": 22, "minute": 0, "drive": "OFF", "remote_lock": "PROHIBIT"},
+    ]
+    req_locked = build_set_weekly_schedule_request([1], 1, events_locked)
+    assert 'Drive="OFF" Mode="AUTO" SetTemp="0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON"' in req_locked
+
+    # Test parse_weekly_schedule with remote_lock
+    xml_wpattern = """<?xml version="1.0" encoding="UTF-8"?>
+    <Packet>
+      <DatabaseManager>
+        <ScheduleControl>
+          <WPatternList Group="1" Season="1" Pattern="1">
+            <WPatternRecord Index="1" Hour="8" Minute="0" Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_OFF" ModeItem="CHK_OFF" SetTempItem="CHK_OFF" />
+            <WPatternRecord Index="2" Hour="22" Minute="0" Drive="OFF" Mode="AUTO" SetTemp="0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON" />
+          </WPatternList>
+        </ScheduleControl>
+      </DatabaseManager>
+    </Packet>"""
+    from gb50.protocol import parse_weekly_schedule
+    from gb50.constants import RemoteControlPermission
+    parsed_pat = parse_weekly_schedule(xml_wpattern)
+    assert len(parsed_pat[1]) == 2
+    assert parsed_pat[1][0].remote_lock == RemoteControlPermission.PERMIT
+    assert parsed_pat[1][1].remote_lock == RemoteControlPermission.PROHIBIT
+
 
 def test_seasonal_schedule_protocol():
     """Verify season date spans request builders, parsers, and active date calculation."""
