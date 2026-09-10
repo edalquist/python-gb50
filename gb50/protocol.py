@@ -540,14 +540,12 @@ def build_set_today_schedule_request(group_ids: List[int], events: List[Dict[str
             set_temp = ev["set_temp_c"]
             fan = escape_xml_attr(ev["fan_speed"]) or "AUTO"
             air_dir = escape_xml_attr(ev["air_direction"]) or "AUTO"
-            drive_item = "CHK_ON" if drive else "CHK_OFF"
-            mode_item = "CHK_ON" if mode else "CHK_OFF"
-            if set_temp is not None:
-                st_val = f"{set_temp:.1f}"
-                set_temp_item = "CHK_ON"
-            else:
-                st_val = "0"
-                set_temp_item = "CHK_OFF"
+            # Mitsubishi GB-50 schedule items: CHK_OFF = Permit (Unlock) wall remote, CHK_ON = Prohibit (Lock) wall remote.
+            # Default to CHK_OFF so schedules execute setpoints without locking wall thermostats.
+            drive_item = "CHK_ON" if ev.get("prohibit_drive") or ev.get("drive_item") == "CHK_ON" else "CHK_OFF"
+            mode_item = "CHK_ON" if ev.get("prohibit_mode") or ev.get("mode_item") == "CHK_ON" else "CHK_OFF"
+            set_temp_item = "CHK_ON" if ev.get("prohibit_set_temp") or ev.get("set_temp_item") == "CHK_ON" else "CHK_OFF"
+            st_val = f"{set_temp:.1f}" if set_temp is not None else "0"
             rec_lines.append(
                 f'        <TodayRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" SetTemp="{st_val}" AirDirection="{air_dir}" FanSpeed="{fan}" DriveItem="{drive_item}" ModeItem="{mode_item}" SetTempItem="{set_temp_item}" />\r\n'
             )
@@ -580,14 +578,11 @@ def build_set_weekly_schedule_request(group_ids: List[int], day_of_week: int, ev
             set_temp = ev["set_temp_c"]
             fan = escape_xml_attr(ev["fan_speed"]) or "AUTO"
             air_dir = escape_xml_attr(ev["air_direction"]) or "AUTO"
-            drive_item = "CHK_ON" if drive else "CHK_OFF"
-            mode_item = "CHK_ON" if mode else "CHK_OFF"
-            if set_temp is not None:
-                st_val = f"{set_temp:.1f}"
-                set_temp_item = "CHK_ON"
-            else:
-                st_val = "0"
-                set_temp_item = "CHK_OFF"
+            # Mitsubishi GB-50 schedule items: CHK_OFF = Permit (Unlock) wall remote, CHK_ON = Prohibit (Lock) wall remote.
+            drive_item = "CHK_ON" if ev.get("prohibit_drive") or ev.get("drive_item") == "CHK_ON" else "CHK_OFF"
+            mode_item = "CHK_ON" if ev.get("prohibit_mode") or ev.get("mode_item") == "CHK_ON" else "CHK_OFF"
+            set_temp_item = "CHK_ON" if ev.get("prohibit_set_temp") or ev.get("set_temp_item") == "CHK_ON" else "CHK_OFF"
+            st_val = f"{set_temp:.1f}" if set_temp is not None else "0"
             rec_lines.append(
                 f'        <WPatternRecord Index="{idx}" Hour="{hr}" Minute="{mn}" Drive="{drive}" Mode="{mode}" SetTemp="{st_val}" AirDirection="{air_dir}" FanSpeed="{fan}" DriveItem="{drive_item}" ModeItem="{mode_item}" SetTempItem="{set_temp_item}" />\r\n'
             )

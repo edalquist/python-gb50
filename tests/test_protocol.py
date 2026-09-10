@@ -264,12 +264,12 @@ def test_group_crud_and_floor_protocol():
     req_weekly = build_set_weekly_schedule_request([1, 2], 1, events)
     assert '<WPatternList Group="1" Season="1" Pattern="1">' in req_weekly
     assert '<WPatternList Group="2" Season="1" Pattern="1">' in req_weekly
-    assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON"' in req_weekly
-    assert 'Drive="OFF" Mode="AUTO" SetTemp="0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_OFF"' in req_weekly
+    assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_OFF" ModeItem="CHK_OFF" SetTempItem="CHK_OFF"' in req_weekly
+    assert 'Drive="OFF" Mode="AUTO" SetTemp="0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_OFF" ModeItem="CHK_OFF" SetTempItem="CHK_OFF"' in req_weekly
 
     req_today = build_set_today_schedule_request([1], events)
     assert '<TodayList Group="1">' in req_today
-    assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON"' in req_today
+    assert 'Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_OFF" ModeItem="CHK_OFF" SetTempItem="CHK_OFF"' in req_today
 
 
 def test_seasonal_schedule_protocol():
