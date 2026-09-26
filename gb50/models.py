@@ -74,6 +74,8 @@ class GroupStatus(BaseModel):
     """Real-time status and telemetry for an HVAC group / zone."""
     group_id: int = Field(..., description="Logical group ID (1..50)")
     name: str = Field(..., description="Web display name (e.g. 'FC1-1')")
+    room_name: Optional[str] = Field(None, description="Human-readable room/space name")
+    area_name: Optional[str] = Field(None, description="Building area grouping (e.g. Floor 1, Wing A)")
     floor: Optional[int] = Field(1, description="Assigned floor level (1..10)")
     model: ModelType = Field(ModelType.IC, description="Equipment model (IC=Indoor, LC=Lossnay)")
     address: int = Field(..., description="Primary M-Net hardware address")

@@ -368,3 +368,17 @@ class StateManager:
 
         for ws in dead_subs:
             self._raw_subscribers.discard(ws)
+
+    async def broadcast_event(self, payload: Dict[str, Any]) -> None:
+        """Broadcast an arbitrary event payload to all raw WebSocket subscribers."""
+        if not self._raw_subscribers:
+            return
+        dead_subs = set()
+        for ws in list(self._raw_subscribers):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                dead_subs.add(ws)
+        for ws in dead_subs:
+            self._raw_subscribers.discard(ws)
+

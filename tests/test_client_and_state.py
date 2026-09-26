@@ -354,3 +354,78 @@ def test_schedule_event_validation_negative():
         build_set_weekly_schedule_request([1], 1, [{"hour": 8, "minute": 0, "set_temp_c": 45.0}])
 
 
+@pytest.mark.asyncio
+async def test_http_500_transient_retried_up_to_max_retries():
+    """Verify GB50Client retries transient HTTP 500 responses without XML up to max_retries."""
+    client = GB50Client(host="127.0.0.1")
+
+    call_count = 0
+    mock_resp = AsyncMock()
+    mock_resp.status = 500
+    mock_resp.text.return_value = "Internal Server Error: Simulated Transient Hardware Failure"
+
+    mock_session = MagicMock()
+    mock_session.closed = False
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_resp
+
+    def post_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return mock_cm
+
+    mock_session.post.side_effect = post_side_effect
+    client._session = mock_session
+    client._owns_session = False
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with pytest.raises(GB50TransportError, match="HTTP 500 from controller"):
+            await client._send_xml("<Packet/>", max_retries=2)
+
+    assert call_count == 3  # 1 initial + 2 retries
+    assert mock_sleep.call_count == 2  # 2 backoff sleeps
+
+
+@pytest.mark.asyncio
+async def test_http_500_transient_recovers_on_retry():
+    """Verify GB50Client recovers when a transient HTTP 500 is followed by an HTTP 200 response."""
+    client = GB50Client(host="127.0.0.1")
+
+    call_count = 0
+    mock_resp_500 = AsyncMock()
+    mock_resp_500.status = 500
+    mock_resp_500.text.return_value = "<html><body>Transient Gateway Error</body></html>"
+
+    mock_resp_200 = AsyncMock()
+    mock_resp_200.status = 200
+    mock_resp_200.text.return_value = '<?xml version="1.0"?><Packet><Command>getResponse</Command></Packet>'
+
+    mock_session = MagicMock()
+    mock_session.closed = False
+
+    cm_500 = AsyncMock()
+    cm_500.__aenter__.return_value = mock_resp_500
+    cm_200 = AsyncMock()
+    cm_200.__aenter__.return_value = mock_resp_200
+
+    def post_side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return cm_500
+        return cm_200
+
+    mock_session.post.side_effect = post_side_effect
+    client._session = mock_session
+    client._owns_session = False
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        resp = await client._send_xml("<Packet/>", max_retries=2)
+
+    assert call_count == 2
+    assert "getResponse" in resp
+    assert mock_sleep.call_count == 1
+
+
+
