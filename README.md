@@ -1,5 +1,7 @@
 # Python GB-50 Client Library (`gb50`)
 
+> Example addresses, device identifiers, and test credentials are synthetic. Configure your own controller address; never reuse test credentials in a deployment.
+
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
