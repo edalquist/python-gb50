@@ -87,8 +87,9 @@ def parse_bulk_telemetry(bulk_hex: str) -> Dict[str, Any]:
         raise GB50ParseError(f"Unknown bulk fan speed code: {data[8]:#04x}", byte_index=8, raw_value=data[8])
     fan_speed = BULK_FAN_SPEED_MAP[data[8]]
 
-    # 7. Remote Controller Lock (Byte 9)
-    remote_lock = RemoteControlPermission.PROHIBIT if data[9] == 1 else RemoteControlPermission.PERMIT
+    # 7. Remote Controller Lock (Byte 9: RemoCon, Byte 10: DriveItem, Byte 11: ModeItem, Byte 12: SetTempItem)
+    is_locked = (data[9] == 1 or data[10] == 1 or data[11] == 1 or data[12] == 1)
+    remote_lock = RemoteControlPermission.PROHIBIT if is_locked else RemoteControlPermission.PERMIT
 
     # 8. Filter Sign & Error Sign (Bytes 15-16)
     filter_dirty = data[15] == 1

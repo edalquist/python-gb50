@@ -290,12 +290,73 @@ def test_group_crud_and_floor_protocol():
         </ScheduleControl>
       </DatabaseManager>
     </Packet>"""
-    from gb50.protocol import parse_weekly_schedule
+    from gb50.protocol import parse_weekly_schedule, parse_today_schedule
     from gb50.constants import RemoteControlPermission
     parsed_pat = parse_weekly_schedule(xml_wpattern)
     assert len(parsed_pat[1]) == 2
     assert parsed_pat[1][0].remote_lock == RemoteControlPermission.PERMIT
     assert parsed_pat[1][1].remote_lock == RemoteControlPermission.PROHIBIT
+
+    # Test parse_today_schedule with remote_lock
+    xml_today = """<?xml version="1.0" encoding="UTF-8"?>
+    <Packet>
+      <DatabaseManager>
+        <ScheduleControl>
+          <TodayList Group="1">
+            <TodayRecord Index="1" Hour="8" Minute="0" Drive="ON" Mode="COOL" SetTemp="22.0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_OFF" ModeItem="CHK_OFF" SetTempItem="CHK_OFF" />
+            <TodayRecord Index="2" Hour="22" Minute="0" Drive="OFF" Mode="AUTO" SetTemp="0" AirDirection="AUTO" FanSpeed="AUTO" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON" />
+          </TodayList>
+        </ScheduleControl>
+      </DatabaseManager>
+    </Packet>"""
+    parsed_today = parse_today_schedule(xml_today)
+    assert len(parsed_today) == 2
+    assert parsed_today[0].remote_lock == RemoteControlPermission.PERMIT
+    assert parsed_today[1].remote_lock == RemoteControlPermission.PROHIBIT
+
+
+def test_mutation_and_telemetry_remote_lock_synchronization():
+    """Verify build_set_group_request, build_set_groups_batch_request, and parse_groups_telemetry handle remote locks."""
+    from gb50.constants import RemoteControlPermission
+    from gb50.models import GroupControlRequest
+    from gb50.protocol import build_set_group_request, build_set_groups_batch_request, parse_groups_telemetry
+
+    # 1. Lock mutation emits RemoCon="PROHIBIT" and all CHK_ON items
+    req_lock = build_set_group_request(1, GroupControlRequest(remote_lock=RemoteControlPermission.PROHIBIT))
+    assert 'RemoCon="PROHIBIT"' in req_lock
+    assert 'DriveItem="CHK_ON"' in req_lock
+    assert 'ModeItem="CHK_ON"' in req_lock
+    assert 'SetTempItem="CHK_ON"' in req_lock
+
+    # 2. Unlock mutation emits RemoCon="PERMIT" and all CHK_OFF items
+    req_unlock = build_set_group_request(1, GroupControlRequest(remote_lock=RemoteControlPermission.PERMIT))
+    assert 'RemoCon="PERMIT"' in req_unlock
+    assert 'DriveItem="CHK_OFF"' in req_unlock
+    assert 'ModeItem="CHK_OFF"' in req_unlock
+    assert 'SetTempItem="CHK_OFF"' in req_unlock
+
+    # 3. Batch mutation emits same
+    req_batch = build_set_groups_batch_request({
+        1: GroupControlRequest(remote_lock=RemoteControlPermission.PERMIT),
+        2: GroupControlRequest(remote_lock=RemoteControlPermission.PROHIBIT),
+    })
+    assert 'Group="1"' in req_batch
+    assert 'RemoCon="PERMIT" DriveItem="CHK_OFF" ModeItem="CHK_OFF" SetTempItem="CHK_OFF"' in req_batch
+    assert 'Group="2"' in req_batch
+    assert 'RemoCon="PROHIBIT" DriveItem="CHK_ON" ModeItem="CHK_ON" SetTempItem="CHK_ON"' in req_batch
+
+    # 4. parse_groups_telemetry with XML attributes (fallback branch)
+    xml_attr_locked = """<?xml version="1.0" encoding="UTF-8"?>
+    <Packet>
+      <DatabaseManager>
+        <Mnet Group="1" Drive="ON" Mode="COOL" SetTemp="22.0" InletTemp="21.0" AirDirection="AUTO" FanSpeed="AUTO" Schedule="ON" FilterSign="OFF" ErrorSign="OFF" RemoCon="PERMIT" DriveItem="CHK_ON" />
+        <Mnet Group="2" Drive="OFF" Mode="AUTO" SetTemp="22.0" InletTemp="21.0" AirDirection="AUTO" FanSpeed="AUTO" Schedule="ON" FilterSign="OFF" ErrorSign="OFF" RemoCon="PERMIT" DriveItem="CHK_OFF" />
+      </DatabaseManager>
+    </Packet>"""
+    statuses = parse_groups_telemetry(xml_attr_locked)
+    assert len(statuses) == 2
+    assert statuses[0].remote_lock == RemoteControlPermission.PROHIBIT  # DriveItem="CHK_ON" triggers PROHIBIT
+    assert statuses[1].remote_lock == RemoteControlPermission.PERMIT
 
 
 def test_seasonal_schedule_protocol():

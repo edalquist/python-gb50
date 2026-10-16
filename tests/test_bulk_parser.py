@@ -87,3 +87,24 @@ def test_invalid_bulk_non_hex_characters():
         parse_bulk_telemetry(hex_data)
 
 
+def test_granular_button_lockout_detection():
+    # Byte 9 (RemoCon) is 0 (PERMIT), but Byte 10 (DriveItem) is 1 (CHK_ON)
+    base_bytes = bytearray(bytes.fromhex("010002140000E6040600000000000000001F0000000100010000010000000000000000000000000000000000000000000000000000000000000000000000000000"))
+    assert parse_bulk_telemetry(base_bytes.hex())["remote_lock"] == RemoteControlPermission.PERMIT
+
+    # Test DriveItem = 1 (Byte 10)
+    drive_locked = bytearray(base_bytes)
+    drive_locked[10] = 1
+    assert parse_bulk_telemetry(drive_locked.hex())["remote_lock"] == RemoteControlPermission.PROHIBIT
+
+    # Test ModeItem = 1 (Byte 11)
+    mode_locked = bytearray(base_bytes)
+    mode_locked[11] = 1
+    assert parse_bulk_telemetry(mode_locked.hex())["remote_lock"] == RemoteControlPermission.PROHIBIT
+
+    # Test SetTempItem = 1 (Byte 12)
+    temp_locked = bytearray(base_bytes)
+    temp_locked[12] = 1
+    assert parse_bulk_telemetry(temp_locked.hex())["remote_lock"] == RemoteControlPermission.PROHIBIT
+
+

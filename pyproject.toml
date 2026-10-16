@@ -8,7 +8,7 @@ include = ["gb50*"]
 
 [project]
 name = "gb50"
-version = "1.1.0"
+version = "1.1.1"
 description = "Asynchronous Python client library for Mitsubishi GB-50 / AG-150 / G-50 central HVAC controllers"
 readme = "README.md"
 requires-python = ">=3.9"

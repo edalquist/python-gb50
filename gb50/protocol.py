@@ -356,7 +356,8 @@ def build_get_groups_telemetry_request(group_ids: List[int]) -> str:
     for gid in group_ids:
         lines.append(
             f'    <Mnet Group="{gid}" Drive="*" Mode="*" SetTemp="*" InletTemp="*" '
-            f'AirDirection="*" FanSpeed="*" Schedule="*" FilterSign="*" ErrorSign="*" Bulk="*" />\r\n'
+            f'AirDirection="*" FanSpeed="*" Schedule="*" FilterSign="*" ErrorSign="*" '
+            f'RemoCon="*" DriveItem="*" ModeItem="*" SetTempItem="*" Bulk="*" />\r\n'
         )
     return wrap_packet("getRequest", "".join(lines))
 
@@ -377,6 +378,10 @@ def build_set_group_request(group_id: int, update: GroupControlRequest) -> str:
         attrs.append(f'FanSpeed="{update.fan_speed.value}"')
     if update.remote_lock is not None:
         attrs.append(f'RemoCon="{update.remote_lock.value}"')
+        item_val = "CHK_ON" if update.remote_lock == RemoteControlPermission.PROHIBIT else "CHK_OFF"
+        attrs.append(f'DriveItem="{item_val}"')
+        attrs.append(f'ModeItem="{item_val}"')
+        attrs.append(f'SetTempItem="{item_val}"')
 
     body = f'    <Mnet {" ".join(attrs)} />\r\n'
     return wrap_packet("setRequest", body)
@@ -400,6 +405,10 @@ def build_set_groups_batch_request(updates: Dict[int, GroupControlRequest]) -> s
             attrs.append(f'FanSpeed="{update.fan_speed.value}"')
         if update.remote_lock is not None:
             attrs.append(f'RemoCon="{update.remote_lock.value}"')
+            item_val = "CHK_ON" if update.remote_lock == RemoteControlPermission.PROHIBIT else "CHK_OFF"
+            attrs.append(f'DriveItem="{item_val}"')
+            attrs.append(f'ModeItem="{item_val}"')
+            attrs.append(f'SetTempItem="{item_val}"')
         lines.append(f'    <Mnet {" ".join(attrs)} />\r\n')
     return wrap_packet("setRequest", "".join(lines))
 
@@ -931,9 +940,25 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
         slaves = meta.get("slaves", [])
         floor = meta.get("floor") if meta.get("floor") is not None else 1
         
+        remocon_attr = mnet.attrib.get("RemoCon")
+        drive_item_attr = mnet.attrib.get("DriveItem")
+        mode_item_attr = mnet.attrib.get("ModeItem")
+        set_temp_item_attr = mnet.attrib.get("SetTempItem")
+        xml_locked = (
+            remocon_attr == "PROHIBIT"
+            or drive_item_attr == "CHK_ON"
+            or mode_item_attr == "CHK_ON"
+            or set_temp_item_attr == "CHK_ON"
+        )
+
         bulk_hex = mnet.attrib.get("Bulk")
         if bulk_hex and len(bulk_hex) >= 130:
             parsed = parse_bulk_telemetry(bulk_hex)
+            lock_status = (
+                RemoteControlPermission.PROHIBIT
+                if (parsed["remote_lock"] == RemoteControlPermission.PROHIBIT or xml_locked)
+                else RemoteControlPermission.PERMIT
+            )
             status = GroupStatus(
                 group_id=gid,
                 name=name,
@@ -950,7 +975,7 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
                 schedule_enabled=parsed["schedule_enabled"],
                 filter_dirty=parsed["filter_dirty"],
                 error_active=parsed["error_active"],
-                remote_lock=parsed["remote_lock"],
+                remote_lock=lock_status,
                 capabilities=parsed["capabilities"],
                 raw_bulk=bulk_hex,
             )
@@ -966,6 +991,7 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
             sched = mnet.attrib.get("Schedule") == "ON"
             filter_d = mnet.attrib.get("FilterSign") == "ON"
             err_act = mnet.attrib.get("ErrorSign") == "ON"
+            remote_lock = RemoteControlPermission.PROHIBIT if xml_locked else RemoteControlPermission.PERMIT
             model = meta.get("model", ModelType.IC)
 
             status = GroupStatus(
@@ -984,6 +1010,7 @@ def parse_groups_telemetry(xml_str: str, topology: Optional[Dict[int, Dict[str, 
                 schedule_enabled=sched,
                 filter_dirty=filter_d,
                 error_active=err_act,
+                remote_lock=remote_lock,
                 raw_bulk=None,
             )
         groups.append(status)
@@ -1018,6 +1045,14 @@ def parse_today_schedule(xml_str: str) -> List[ScheduleItem]:
         
         fs_str = rec.attrib.get("FanSpeed")
         fan_spd = FanSpeed(fs_str) if fs_str in FanSpeed.__members__ else None
+        drive_item = rec.attrib.get("DriveItem")
+        mode_item = rec.attrib.get("ModeItem")
+        set_temp_item = rec.attrib.get("SetTempItem")
+        remote_lock = (
+            RemoteControlPermission.PROHIBIT
+            if (drive_item == "CHK_ON" or mode_item == "CHK_ON" or set_temp_item == "CHK_ON")
+            else RemoteControlPermission.PERMIT
+        )
 
         items.append(
             ScheduleItem(
@@ -1029,6 +1064,7 @@ def parse_today_schedule(xml_str: str) -> List[ScheduleItem]:
                 set_temp_c=set_temp,
                 air_direction=air_dir,
                 fan_speed=fan_spd,
+                remote_lock=remote_lock,
             )
         )
     return sorted(items, key=lambda x: (x.hour, x.minute))
