@@ -356,4 +356,8 @@ def test_seasonal_schedule_protocol():
     assert parsed[2].is_active_on(7, 15) is False
 
 
-
+def test_build_reset_controller_request():
+    from gb50.protocol import build_reset_controller_request
+    req = build_reset_controller_request()
+    assert "<Command>setRequest</Command>" in req
+    assert '<SystemData Operation="RESET" />' in req

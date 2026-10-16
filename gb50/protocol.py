@@ -110,6 +110,7 @@ def build_set_system_data_request(settings: Dict[str, Any]) -> str:
         "use_ec": "UseEc",
         "prohibit_level": "Prohibit",
         "external_input": "External",
+        "operation": "Operation",
     }
     for key, attr_name in field_map.items():
         if key in settings and settings[key] is not None:
@@ -120,6 +121,12 @@ def build_set_system_data_request(settings: Dict[str, Any]) -> str:
         raise ValueError("No valid SystemData fields provided to update")
     
     body = f'    <SystemData {" ".join(attrs)} />\r\n'
+    return wrap_packet("setRequest", body)
+
+
+def build_reset_controller_request() -> str:
+    """Build request to reboot/reset the GB-50 controller (e.g., to apply network or M-Net changes)."""
+    body = '    <SystemData Operation="RESET" />\r\n'
     return wrap_packet("setRequest", body)
 
 

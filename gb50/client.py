@@ -35,6 +35,7 @@ from .exceptions import (
 from .protocol import (
     build_get_system_info_request,
     build_set_system_data_request,
+    build_reset_controller_request,
     build_get_topology_request,
     build_set_group_name_request,
     build_set_all_group_names_request,
@@ -206,6 +207,14 @@ class GB50Client:
     async def set_system_info(self, settings: Dict[str, Any]) -> bool:
         """Update controller SystemData settings (name, IP, mask, gateway, formats, etc.)."""
         xml_req = build_set_system_data_request(settings)
+        xml_resp = await self._send_xml(xml_req)
+        root = ET.fromstring(xml_resp)
+        check_error_response(root, raw_xml=xml_resp)
+        return True
+
+    async def reset_controller(self) -> bool:
+        """Send Operation=RESET to reboot the GB-50 controller and apply staged network/system settings."""
+        xml_req = build_reset_controller_request()
         xml_resp = await self._send_xml(xml_req)
         root = ET.fromstring(xml_resp)
         check_error_response(root, raw_xml=xml_resp)
