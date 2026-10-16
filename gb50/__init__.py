@@ -18,6 +18,7 @@ from .models import (
     AlarmRecord,
     SeasonRecord,
     c_to_f,
+    c_to_f_target,
     f_to_c,
 )
 from .exceptions import (
@@ -29,7 +30,7 @@ from .exceptions import (
 from .client import GB50Client
 from .state_manager import StateManager
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 __all__ = [
     "GB50Client",
@@ -53,6 +54,7 @@ __all__ = [
     "AlarmRecord",
     "SeasonRecord",
     "c_to_f",
+    "c_to_f_target",
     "f_to_c",
 ]
 

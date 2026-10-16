@@ -23,6 +23,13 @@ def c_to_f(celsius: Optional[float]) -> Optional[float]:
     return round((celsius * 9.0 / 5.0) + 32.0, 1)
 
 
+def c_to_f_target(celsius: Optional[float]) -> Optional[float]:
+    """Convert Celsius target setpoint to Fahrenheit rounded to 0.5 increments."""
+    if celsius is None:
+        return None
+    return round(((celsius * 9.0 / 5.0) + 32.0) * 2.0) / 2.0
+
+
 def f_to_c(fahrenheit: Optional[float]) -> Optional[float]:
     """Convert Fahrenheit to Celsius rounded to 1 decimal place."""
     if fahrenheit is None:
@@ -73,22 +80,22 @@ class GroupCapabilities(BaseModel):
     @computed_field
     @property
     def temp_min_cool_f(self) -> float:
-        return c_to_f(self.temp_min_cool_c) or 67.0
+        return c_to_f_target(self.temp_min_cool_c) or 67.0
 
     @computed_field
     @property
     def temp_max_cool_f(self) -> float:
-        return c_to_f(self.temp_max_cool_c) or 86.0
+        return c_to_f_target(self.temp_max_cool_c) or 86.0
 
     @computed_field
     @property
     def temp_min_heat_f(self) -> float:
-        return c_to_f(self.temp_min_heat_c) or 63.0
+        return c_to_f_target(self.temp_min_heat_c) or 63.0
 
     @computed_field
     @property
     def temp_max_heat_f(self) -> float:
-        return c_to_f(self.temp_max_heat_c) or 82.0
+        return c_to_f_target(self.temp_max_heat_c) or 82.0
 
 
 class GroupStatus(BaseModel):
@@ -123,8 +130,8 @@ class GroupStatus(BaseModel):
     @computed_field
     @property
     def set_temp_f(self) -> Optional[float]:
-        """Target temperature in Fahrenheit."""
-        return c_to_f(self.set_temp_c)
+        """Target temperature in Fahrenheit rounded to 0.5 increments."""
+        return c_to_f_target(self.set_temp_c)
 
     @computed_field
     @property
@@ -197,7 +204,7 @@ class ScheduleItem(BaseModel):
     @computed_field
     @property
     def set_temp_f(self) -> Optional[float]:
-        return c_to_f(self.set_temp_c)
+        return c_to_f_target(self.set_temp_c)
 
     @computed_field
     @property
