@@ -29,7 +29,7 @@ from .exceptions import (
 from .client import GB50Client
 from .state_manager import StateManager
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 
 __all__ = [
     "GB50Client",

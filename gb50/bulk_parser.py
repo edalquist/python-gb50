@@ -116,6 +116,7 @@ def parse_bulk_telemetry(bulk_hex: str) -> Dict[str, Any]:
     heat_rec_sw = data[31] == 1
     air_stage_code = data[45]
     air_stages = 5 if air_stage_code == 1 else 4
+    fan_auto_sw = data[47] == 1
 
     # Temperature Limits (Bytes 32-40)
     cool_min = parse_bcd_temp(data[32], (data[38] >> 4) & 0xF) or 19.0
@@ -126,9 +127,11 @@ def parse_bulk_telemetry(bulk_hex: str) -> Dict[str, Any]:
     auto_max = parse_bcd_temp(data[37], data[40] & 0xF) or 28.0
 
     capabilities = GroupCapabilities(
+        model=model,
         has_auto_mode=auto_sw,
         has_dry_mode=dry_sw,
         has_fan_speed=fan_stage_code != 2,
+        has_auto_fan_speed=fan_auto_sw,
         has_air_direction=air_dir_sw,
         has_swing=swing_sw,
         has_ventilation=venti_sw,

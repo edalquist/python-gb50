@@ -108,3 +108,74 @@ def test_granular_button_lockout_detection():
     assert parse_bulk_telemetry(temp_locked.hex())["remote_lock"] == RemoteControlPermission.PROHIBIT
 
 
+def test_supported_fan_speeds_stages_and_models():
+    # Base 65-byte packet for an IC unit
+    base = bytearray(65)
+    base[0] = 0x01   # Header
+    base[17] = 0x1F  # IC unit
+    base[23] = 1     # auto_sw
+    base[24] = 1     # dry_sw
+
+    # 1. 2-Stage IC unit with Auto fan speed (like Group 22 / Address 18)
+    base[25] = 0     # 2STAGES
+    base[47] = 1     # FanAutoSW = ENABLE
+    parsed_2stage_auto = parse_bulk_telemetry(base.hex())
+    assert parsed_2stage_auto["capabilities"].fan_speed_stages == 2
+    assert parsed_2stage_auto["capabilities"].has_auto_fan_speed is True
+    assert parsed_2stage_auto["capabilities"].supported_fan_speeds == [
+        FanSpeed.AUTO,
+        FanSpeed.MID2,
+        FanSpeed.HIGH,
+    ]
+
+    # 2. 2-Stage IC unit WITHOUT Auto fan speed
+    base[47] = 0     # FanAutoSW = DISABLE
+    parsed_2stage_no_auto = parse_bulk_telemetry(base.hex())
+    assert parsed_2stage_no_auto["capabilities"].supported_fan_speeds == [
+        FanSpeed.MID2,
+        FanSpeed.HIGH,
+    ]
+
+    # 3. 3-Stage IC unit with Auto fan speed
+    base[25] = 3     # 3STAGES
+    base[47] = 1     # FanAutoSW = ENABLE
+    parsed_3stage = parse_bulk_telemetry(base.hex())
+    assert parsed_3stage["capabilities"].fan_speed_stages == 3
+    assert parsed_3stage["capabilities"].supported_fan_speeds == [
+        FanSpeed.AUTO,
+        FanSpeed.MID2,
+        FanSpeed.MID1,
+        FanSpeed.HIGH,
+    ]
+
+    # 4. 4-Stage IC unit with Auto fan speed
+    base[25] = 1     # 4STAGES
+    base[47] = 1     # FanAutoSW = ENABLE
+    parsed_4stage = parse_bulk_telemetry(base.hex())
+    assert parsed_4stage["capabilities"].fan_speed_stages == 4
+    assert parsed_4stage["capabilities"].supported_fan_speeds == [
+        FanSpeed.AUTO,
+        FanSpeed.LOW,
+        FanSpeed.MID2,
+        FanSpeed.MID1,
+        FanSpeed.HIGH,
+    ]
+
+    # 5. Fixed fan speed IC unit (no speed change)
+    base[25] = 2     # NONE
+    parsed_fixed = parse_bulk_telemetry(base.hex())
+    assert parsed_fixed["capabilities"].has_fan_speed is False
+    assert parsed_fixed["capabilities"].supported_fan_speeds == []
+
+    # 6. LOSSNAY (LC) ventilator unit
+    base[17] = 0x02  # LC model
+    base[25] = 0     # 2 stages
+    base[47] = 0     # FanAutoSW = DISABLE
+    parsed_lc = parse_bulk_telemetry(base.hex())
+    assert parsed_lc["capabilities"].supported_fan_speeds == [
+        FanSpeed.LOW,
+        FanSpeed.HIGH,
+    ]
+
+
+

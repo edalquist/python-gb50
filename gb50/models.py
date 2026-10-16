@@ -32,9 +32,11 @@ def f_to_c(fahrenheit: Optional[float]) -> Optional[float]:
 
 class GroupCapabilities(BaseModel):
     """Capabilities and supported hardware features for a specific HVAC group."""
+    model: Optional[ModelType] = None
     has_auto_mode: bool = True
     has_dry_mode: bool = True
     has_fan_speed: bool = True
+    has_auto_fan_speed: bool = True
     has_air_direction: bool = True
     has_swing: bool = True
     has_ventilation: bool = False
@@ -48,6 +50,25 @@ class GroupCapabilities(BaseModel):
     temp_max_heat_c: float = 28.0
     temp_min_auto_c: float = 19.0
     temp_max_auto_c: float = 28.0
+
+    @computed_field
+    @property
+    def supported_fan_speeds(self) -> List[FanSpeed]:
+        """List of supported fan speeds based on stages, model, and hardware switches."""
+        if not self.has_fan_speed or self.fan_speed_stages == 0:
+            return []
+        if self.model == ModelType.LC or (self.has_ventilation and not self.has_auto_mode and not self.has_dry_mode):
+            return [FanSpeed.LOW, FanSpeed.HIGH]
+        speeds: List[FanSpeed] = []
+        if self.has_auto_fan_speed:
+            speeds.append(FanSpeed.AUTO)
+        if self.fan_speed_stages == 2:
+            speeds.extend([FanSpeed.MID2, FanSpeed.HIGH])
+        elif self.fan_speed_stages == 3:
+            speeds.extend([FanSpeed.MID2, FanSpeed.MID1, FanSpeed.HIGH])
+        else:
+            speeds.extend([FanSpeed.LOW, FanSpeed.MID2, FanSpeed.MID1, FanSpeed.HIGH])
+        return speeds
 
     @computed_field
     @property
